@@ -1,3 +1,5 @@
+import os
+
 import matplotlib
 import mne
 import numpy as np
@@ -28,7 +30,11 @@ def display_eeg__spectral_frequency():
 # matplotlib.use("Qt5Agg")  # Change le backend
 matplotlib.use("TkAgg")
 
-file = "/home/bducrocq/sgoinfre/eeg/eeg-motor-movementimagery-dataset-1.0.0/files/S001/S001R03.edf"
+
+eeg_dir = os.getenv("EEG_DIR", "")
+print("EEG DIR =", eeg_dir)
+
+file = eeg_dir + "/S001/S001R03.edf"
 raw = mne.io.read_raw_edf(file, preload=True)
 # print(f"Fréquence d'échantillonnage : {raw.info['sfreq']} Hz")
 print(raw.info)
