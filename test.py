@@ -117,7 +117,7 @@ matplotlib.use("TkAgg")
 # Chargement d'un fichier EDF
 eeg_dir = os.getenv("EEG_DIR", "")
 print("EEG DIR =", eeg_dir)
-file = os.path.join(eeg_dir, "S002", "S002R10.edf")
+file = os.path.join(eeg_dir, "S001", "S001R01.edf")
 raw = mne.io.read_raw_edf(file, preload=True)
 print(raw.info)
 
