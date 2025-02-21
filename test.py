@@ -8,13 +8,97 @@ import pickle
 import warnings
 
 from mne.decoding import CSP
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split, cross_val_score
 
+# Constante minimale pour la longueur du signal pour le filtrage
+MIN_SIGNAL_LENGTH = 265
+
 
 ############################################################################
-# 1) Fonctions d'affichage et d'extraction de features
+# 1) Classe FilterBankCSP : applique plusieurs bandes de fréquences, CSP, puis concatène
+############################################################################
+
+class FilterBankCSP(BaseEstimator, TransformerMixin):
+    """
+    Implémentation du Filter Bank CSP.
+    Pour chaque sous-bande (définie dans filter_bands), on entraîne un CSP séparé.
+    Lors du transform, on filtre, on applique le CSP et on concatène les features.
+
+    X est supposé avoir la forme (n_trials, n_channels, n_times)
+    """
+
+    def __init__(self,
+                 filter_bands=[(8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)],
+                 n_components=4,
+                 csp_reg='ledoit_wolf',
+                 csp_log=True,
+                 sfreq=160.0):
+        self.filter_bands = filter_bands
+        self.n_components = n_components
+        self.csp_reg = csp_reg
+        self.csp_log = csp_log
+        self.sfreq = sfreq
+        self._csps = []  # liste des objets CSP par bande
+
+    def _pad_if_needed(self, X):
+        n_times = X.shape[-1]
+        if n_times < MIN_SIGNAL_LENGTH:
+            pad_width = MIN_SIGNAL_LENGTH - n_times
+            X_padded = np.pad(X, pad_width=((0, 0), (0, 0), (0, pad_width)), mode='constant')
+            return X_padded, n_times  # on retournera plus tard le signal original (non‑padé) en recadrant
+        else:
+            return X, None
+
+    def fit(self, X, y):
+        import mne.filter  # pour filter_data
+        self._csps = []
+        # Pad X si nécessaire
+        X_use, orig_length = self._pad_if_needed(X)
+        for (l_freq, h_freq) in self.filter_bands:
+            # Filtrage dans la bande [l_freq, h_freq]
+            X_filt_full = mne.filter.filter_data(
+                data=X_use, sfreq=self.sfreq,
+                l_freq=l_freq, h_freq=h_freq,
+                verbose=False
+            )
+            # Si le signal avait été padé, recadrer à la longueur d'origine
+            if orig_length is not None:
+                X_filt = X_filt_full[..., :orig_length]
+            else:
+                X_filt = X_filt_full
+            # Création et entraînement du CSP
+            csp = CSP(n_components=self.n_components,
+                      reg=self.csp_reg,
+                      norm_trace=False,
+                      log=self.csp_log)
+            csp.fit(X_filt, y)
+            self._csps.append((l_freq, h_freq, csp))
+        return self
+
+    def transform(self, X):
+        import mne.filter
+        X_use, orig_length = self._pad_if_needed(X)
+        X_features_list = []
+        for (l_freq, h_freq, csp) in self._csps:
+            X_filt_full = mne.filter.filter_data(
+                data=X_use, sfreq=self.sfreq,
+                l_freq=l_freq, h_freq=h_freq,
+                verbose=False
+            )
+            if orig_length is not None:
+                X_filt = X_filt_full[..., :orig_length]
+            else:
+                X_filt = X_filt_full
+            X_csp = csp.transform(X_filt)  # (n_epochs, n_components)
+            X_features_list.append(X_csp)
+        return np.concatenate(X_features_list, axis=1)  # (n_epochs, total_components)
+
+
+############################################################################
+# 2) Fonctions d'affichage
 ############################################################################
 
 def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
@@ -22,32 +106,22 @@ def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
                                     fft_ylim=None, grid_shape=None,
                                     custom_margins=None):
     """
-    Affiche pour chaque canal :
-      - Le signal EEG en domaine temporel.
-      - Le spectre FFT (dans la plage freq_xlim).
+    Affiche pour chaque canal le signal EEG temporel et son spectre FFT.
     """
+    import math
     n_channels = data.shape[0]
     if grid_shape is None:
-        n_rows = int(np.ceil(np.sqrt(n_channels)))
-        n_cols = int(np.ceil(n_channels / n_rows))
+        n_rows = int(math.ceil(math.sqrt(n_channels)))
+        n_cols = int(math.ceil(n_channels / n_rows))
     else:
         n_rows, n_cols = grid_shape
 
-    # Figure des signaux temporels
     fig_time, axs_time = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
-    if n_channels == 1:
-        axs_time = [axs_time]
-    else:
-        axs_time = np.array(axs_time).flatten()
+    axs_time = np.array(axs_time).reshape(-1) if n_channels > 1 else [axs_time]
 
-    # Figure des spectres FFT
     fig_fft, axs_fft = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
-    if n_channels == 1:
-        axs_fft = [axs_fft]
-    else:
-        axs_fft = np.array(axs_fft).flatten()
+    axs_fft = np.array(axs_fft).reshape(-1) if n_channels > 1 else [axs_fft]
 
-    # Ajustement des marges
     if custom_margins is not None:
         fig_time.subplots_adjust(**custom_margins)
         fig_fft.subplots_adjust(**custom_margins)
@@ -57,9 +131,7 @@ def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
         fig_fft.subplots_adjust(left=0.07, right=0.986, top=0.967, bottom=0.06,
                                 wspace=0.2, hspace=0.2)
 
-    # Calcul du vecteur de fréquences
     freqs = np.fft.rfftfreq(len(times), d=1 / sfreq)
-
     for i in range(n_channels):
         axs_time[i].plot(times, data[i])
         axs_time[i].set_title(f"Canal {i} {title_suffix}")
@@ -78,277 +150,287 @@ def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
         axs_fft[i].set_xlim(freq_xlim)
         if fft_ylim is not None:
             axs_fft[i].set_ylim(fft_ylim)
-
     plt.tight_layout()
     return fig_time, fig_fft
 
 
 ############################################################################
-# 2) Prétraitement EDF : sélection de canaux, filtrage, segmentation en epochs
+# 3) Gestion des runs et détermination de catégorie
 ############################################################################
 
 def get_run_category(file_name):
     """
-    Extrait le numéro de run depuis le nom du fichier et retourne la catégorie :
-      - None pour baseline (run <=2)
-      - "mains" pour runs dans [3,4,7,8,11,12]
-      - "deux_effecteurs" pour runs dans [5,6,9,10,13,14]
+    Détermine la catégorie à partir du numéro de run.
+      - Renvoie None pour les runs de baseline (<=2)
+      - 'mains_reel' pour runs [3, 7, 11]
+      - 'mains_image' pour runs [4, 8, 12]
+      - 'deux_reel' pour runs [5, 9, 13]
+      - 'deux_image' pour runs [6, 10, 14]
     """
     m_obj = re.search(r'R(\d+)', file_name)
     if m_obj:
         run = int(m_obj.group(1))
         if run <= 2:
             return None
-        elif run in [3, 4, 7, 8, 11, 12]:
-            return "mains"
-        elif run in [5, 6, 9, 10, 13, 14]:
-            return "deux_effecteurs"
+        if run in [3, 7, 11]:
+            return "mains_reel"
+        elif run in [4, 8, 12]:
+            return "mains_image"
+        elif run in [5, 9, 13]:
+            return "deux_reel"
+        elif run in [6, 10, 14]:
+            return "deux_image"
     return None
 
 
-def process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin=0.0, tmax=4.0):
+############################################################################
+# 4) Chargement EDF, filtrage, découpage en epochs
+############################################################################
+
+def process_edf(file_path, channels_to_keep, l_freq, h_freq,
+                tmin=0.5, tmax=2.5, do_reref=True):
     """
-    Charge un EDF, sélectionne les canaux, applique le filtre et segmente en epochs.
-    On conserve uniquement les événements T1 et T2.
-    Pour garantir une durée constante, on élimine les epochs dont la taille ne correspond pas.
+    Charge le fichier EDF, conserve uniquement les canaux souhaités, (optionnellement)
+    re‑référence, filtre dans [l_freq, h_freq] et découpe en epochs sur [tmin, tmax].
+    Les epochs dont la taille n’est pas conforme sont éliminées.
     """
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="Limited 1 annotation")
         raw = mne.io.read_raw_edf(file_path, preload=True, verbose=False)
     raw.pick(channels_to_keep)
+    if do_reref:
+        raw.set_eeg_reference('average', projection=False, verbose=False)
     raw.filter(l_freq=l_freq, h_freq=h_freq, fir_design='firwin', verbose=False)
-
     events, event_id = mne.events_from_annotations(raw, verbose=False)
-    selected_event_id = {key: val for key, val in event_id.items() if key in ['T1', 'T2']}
+    selected_event_id = {k: v for k, v in event_id.items() if k in ['T1', 'T2']}
     if len(selected_event_id) == 0:
         print(f"[WARNING] Aucun événement T1/T2 dans {file_path}")
         return None
-
     epochs = mne.Epochs(raw, events, event_id=selected_event_id,
                         tmin=tmin, tmax=tmax, baseline=None,
                         preload=True, verbose=False, on_missing='ignore')
-
-    # Calcul du nombre de points attendus
-    expected_n_times = int(round((tmax - tmin) * raw.info['sfreq'])) + 1
-    data = epochs.get_data()  # (n_epochs, n_channels, n_times)
+    sfreq = raw.info['sfreq']
+    expected_n_times = int(round((tmax - tmin) * sfreq)) + 1
+    data = epochs.get_data()
     good_idx = [i for i in range(data.shape[0]) if data[i].shape[-1] == expected_n_times]
     if len(good_idx) < data.shape[0]:
-        print(f"[INFO] Dropping {data.shape[0] - len(good_idx)} incomplete epochs from {file_path}")
         if len(good_idx) == 0:
+            print(f"[INFO] All epochs incomplete => discard {file_path}")
             return None
         epochs = epochs[good_idx]
     return epochs
 
 
+############################################################################
+# 5) Traitement d'un sujet : ne conserve pas la séparation mains en gauche/droite
+#    (pour garantir deux classes par catégorie)
+############################################################################
+
 def process_subject(subject_dir, channels_to_keep, l_freq, h_freq, tmin, tmax):
     """
-    Parcourt tous les EDF d'un sujet et répartit les epochs par catégorie.
-    Retourne un dictionnaire : { 'mains': (X, y), 'deux_effecteurs': (X, y) }.
-    Seules les catégories avec au moins 1 epoch sont retournées.
+    Parcourt tous les fichiers .edf dans subject_dir, détermine la catégorie via get_run_category,
+    et découpe en epochs. Pour les tâches "mains", on conserve l’ensemble (pour avoir à la fois T1 et T2).
+    Renvoie un dictionnaire : { 'mains_reel': (X,y), 'mains_image': (X,y),
+                                'deux_reel': (X,y), 'deux_image': (X,y) }.
     """
-    cat_epochs = {"mains": [], "deux_effecteurs": []}
+    cat_epochs = {
+        "mains_reel": [],
+        "mains_image": [],
+        "deux_reel": [],
+        "deux_image": []
+    }
     for file in os.listdir(subject_dir):
         if file.endswith(".edf"):
             cat = get_run_category(file)
-            if cat is None:
-                continue  # Ignorer les baselines
-            file_path = os.path.join(subject_dir, file)
-            epochs = process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin, tmax)
-            if epochs is not None and len(epochs) > 0:
-                cat_epochs[cat].append(epochs)
-                print(f"[INFO] {file}: {len(epochs)} epochs ajoutées à la catégorie {cat}")
-            else:
-                print(f"[INFO] {file}: 0 epoch (incomplet ou manquant) – ignoré.")
-
+            if cat is not None:
+                file_path = os.path.join(subject_dir, file)
+                epochs = process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin, tmax, do_reref=True)
+                if epochs is not None and len(epochs) > 0:
+                    cat_epochs[cat].append(epochs)
+                    print(f"[INFO] {file}: {len(epochs)} epochs -> {cat}")
+                else:
+                    print(f"[INFO] {file}: 0 epoch -> ignoré.")
     out = {}
     for cat in cat_epochs:
         if len(cat_epochs[cat]) > 0:
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=RuntimeWarning,
-                                        message=".*Concatenation of Annotations.*")
-                try:
-                    epochs_all = mne.concatenate_epochs(cat_epochs[cat])
-                except ValueError:
-                    print(f"[INFO] Aucune epoch valide pour la catégorie {cat} dans {os.path.basename(subject_dir)}")
-                    continue
+            try:
+                epochs_all = mne.concatenate_epochs(cat_epochs[cat])
+            except ValueError:
+                print(f"[INFO] Aucune epoch valide pour cat={cat} dans {subject_dir}")
+                continue
             X = epochs_all.get_data()  # (n_epochs, n_channels, n_times)
             y = epochs_all.events[:, 2]
             if X.size > 0:
                 out[cat] = (X, y)
-                print(f"[INFO] Sujet {os.path.basename(subject_dir)} - Catégorie {cat} : {X.shape[0]} epochs")
-    if len(out) == 0:
-        return None
-    return out
+                print(f"[INFO] Subject {os.path.basename(subject_dir)} - {cat}: {X.shape[0]} epochs")
+    return out if len(out) > 0 else None
 
 
 ############################################################################
-# 3) Pipeline de modélisation : CSP + LDA
-############################################################################
-
-def build_pipeline(n_components=4):
-    csp = CSP(n_components=n_components, reg=None, log=True, norm_trace=False)
-    lda = LinearDiscriminantAnalysis()
-    pipeline = Pipeline([('CSP', csp), ('LDA', lda)])
-    return pipeline
-
-
-############################################################################
-# 4) Découpage par sujet et agrégation des données par catégorie
+# 6) Agrégation multi-sujets
 ############################################################################
 
 def list_subject_dirs(eeg_dir):
-    dirs = [os.path.join(eeg_dir, d) for d in os.listdir(eeg_dir)
-            if os.path.isdir(os.path.join(eeg_dir, d)) and d.startswith("S") and len(d) == 4]
+    dirs = []
+    for d in os.listdir(eeg_dir):
+        path = os.path.join(eeg_dir, d)
+        if os.path.isdir(path) and d.startswith("S") and len(d) == 4:
+            dirs.append(path)
     dirs.sort()
     return dirs
 
 
 def aggregate_subjects(subject_dirs, channels, l_freq, h_freq, tmin, tmax):
     """
-    Agrège pour chaque catégorie les données de tous les sujets.
-    Retourne un dict : { 'mains': (X, y), 'deux_effecteurs': (X, y) }.
-    Seuls les sujets avec des epochs non vides sont pris en compte.
-
-    Pour gérer les durées variables dans la dernière dimension (temps),
-    on tronque chaque tableau à la longueur minimale trouvée parmi tous les sujets.
+    Agrège pour chaque catégorie (les 4 classes) les données de tous les sujets.
+    Pour chaque catégorie, on tronque la dimension temporelle à la plus courte avant concaténation.
+    Renvoie un dictionnaire : cat -> (X, y)
     """
-    agg = {"mains": [], "deux_effecteurs": []}
-    for subj_dir in subject_dirs:
-        subj_data = process_subject(subj_dir, channels, l_freq, h_freq, tmin, tmax)
+    agg = {
+        "mains_reel": [],
+        "mains_image": [],
+        "deux_reel": [],
+        "deux_image": []
+    }
+    for sd in subject_dirs:
+        subj_data = process_subject(sd, channels, l_freq, h_freq, tmin, tmax)
         if subj_data is not None:
             for cat in subj_data:
                 if subj_data[cat][0].size > 0:
                     agg[cat].append(subj_data[cat])
-                    print(f"[INFO] Sujet {os.path.basename(subj_dir)} ajouté à la catégorie {cat}")
-                else:
-                    print(f"[INFO] Sujet {os.path.basename(subj_dir)} a 0 epochs pour la catégorie {cat} – ignoré.")
     out = {}
     for cat in agg:
-        if len(agg[cat]) > 0:
-            X_list = [item[0] for item in agg[cat] if item[0].size > 0]
-            y_list = [item[1] for item in agg[cat] if item[1].size > 0]
-            if len(X_list) > 0:
-                # Tronquer chaque tableau à la longueur minimale le long de l'axe temporel
-                min_length = min(X.shape[-1] for X in X_list)
-                X_list_fixed = [X[..., :min_length] for X in X_list]
-                X_all = np.concatenate(X_list_fixed, axis=0)
-                y_all = np.concatenate(y_list, axis=0)
-                out[cat] = (X_all, y_all)
-                print(f"[INFO] Agrégation finale pour {cat} : {X_all.shape[0]} epochs")
+        if len(agg[cat]) == 0:
+            continue
+        min_length = min(x[0].shape[-1] for x in agg[cat])
+        X_list = []
+        y_list = []
+        for (X_c, y_c) in agg[cat]:
+            X_list.append(X_c[..., :min_length])  # tronquer à la longueur minimale
+            y_list.append(y_c)
+        X_all = np.concatenate(X_list, axis=0)
+        y_all = np.concatenate(y_list, axis=0)
+        out[cat] = (X_all, y_all)
+        print(f"[INFO] Cat={cat}: total epochs={X_all.shape[0]}, time={min_length}")
     return out
 
 
 ############################################################################
-# 5) Script principal
+# 7) Construction du pipeline et exécution globale
 ############################################################################
 
-# Configuration du backend matplotlib
-matplotlib.use("TkAgg")
+if __name__ == "__main__":
+    matplotlib.use("TkAgg")  # ou 'Qt5Agg', etc.
 
-# Récupération du répertoire contenant les données EDF
-eeg_dir = os.getenv("EEG_DIR", "")
-print(f"[INFO] EEG DIR = {eeg_dir}")
+    # Récupération du répertoire EEG via la variable d'environnement EEG_DIR
+    eeg_dir = os.getenv("EEG_DIR", "")
+    print(f"[INFO] EEG_DIR={eeg_dir}")
 
-# --- Affichage comparatif pour S001 (exemple) ---
-subject_example = os.path.join(eeg_dir, "S001")
-file_example = os.path.join(subject_example, "S001R01.edf")
-raw_example = mne.io.read_raw_edf(file_example, preload=True)
-print("[INFO] Exemple (brut) :", raw_example.info)
+    # Exemple d'affichage d'un sujet pour inspection
+    test_subj = "S001"
+    test_run = "S001R01.edf"
+    file_example = os.path.join(eeg_dir, test_subj, test_run)
+    raw_example = mne.io.read_raw_edf(file_example, preload=True)
+    print("[INFO] Exemple brut:", raw_example.info)
+    data_ex, times_ex = raw_example[:]
+    fig_time, fig_fft = display_eeg_signals_and_spectra(
+        data=data_ex,
+        times=times_ex,
+        sfreq=raw_example.info['sfreq'],
+        title_suffix="-Brut",
+        freq_xlim=(0, 80),
+        fft_ylim=(0, 0.03),
+        grid_shape=(8, 8)
+    )
+    plt.show()
 
-# Affichage du signal brut complet (64 canaux)
-data_raw_example, times_raw_example = raw_example[:]
-fig_time_raw, fig_fft_raw = display_eeg_signals_and_spectra(
-    data=data_raw_example,
-    times=times_raw_example,
-    sfreq=raw_example.info['sfreq'],
-    title_suffix="- Brut",
-    time_ylim=None,
-    freq_xlim=(0, 80),
-    fft_ylim=(0, 0.03),
-    grid_shape=(8, 8)  # 64 canaux
-)
+    # Sélection "large" de canaux sensorimoteurs : on retient tous les canaux dont le nom contient 'C', 'CP' ou 'FC'
+    possible_keywords = ['C', 'CP', 'FC']
+    chosen_channels = []
+    for ch in raw_example.info['ch_names']:
+        if any(k in ch.upper() for k in possible_keywords):
+            chosen_channels.append(ch)
+    print(f"[INFO] Nombre de canaux retenus: {len(chosen_channels)} => {chosen_channels}")
 
-# Sélection des canaux sensorimoteurs
-all_c_channels = [ch for ch in raw_example.info["ch_names"] if ch.startswith("C") and ch.endswith("..")]
-if len(all_c_channels) < 3:
-    raise ValueError("Moins de 3 canaux sensorimoteurs trouvés !")
-channels_to_keep = all_c_channels[:3]
-print(f"[INFO] Canaux sélectionnés : {channels_to_keep}")
+    # Liste des dossiers sujets
+    subject_dirs = list_subject_dirs(eeg_dir)
+    print(f"[INFO] {len(subject_dirs)} sujets trouvés.")
 
-# Prétraitement de l'exemple filtré (3 canaux) : filtre 8-32 Hz
-raw_example_filtered = raw_example.copy()
-raw_example_filtered.pick(channels_to_keep)
-raw_example_filtered.filter(l_freq=8.0, h_freq=32.0, fir_design='firwin')
-data_filt_example, times_filt_example = raw_example_filtered[:]
+    # Séparation train / test / holdout
+    train_dirs, temp_dirs = train_test_split(subject_dirs, test_size=0.4, random_state=42)
+    test_dirs, holdout_dirs = train_test_split(temp_dirs, test_size=0.5, random_state=42)
+    print(f"[INFO] Train: {train_dirs}")
+    print(f"[INFO] Test: {test_dirs}")
+    print(f"[INFO] Holdout: {holdout_dirs}")
 
-custom_margins = dict(left=0.038, bottom=0.05, right=0.983, top=0.97, wspace=0.2, hspace=0.256)
-fig_time_filt, fig_fft_filt = display_eeg_signals_and_spectra(
-    data=data_filt_example,
-    times=times_filt_example,
-    sfreq=raw_example.info['sfreq'],
-    title_suffix="- Filtré",
-    time_ylim=None,
-    freq_xlim=(0, 80),
-    fft_ylim=(0, 0.03),
-    grid_shape=(1, 3),
-    custom_margins=custom_margins
-)
+    # Agrégation des données (fenêtre tmin=0.5, tmax=2.5 => environ 2 s)
+    agg_train = aggregate_subjects(train_dirs, chosen_channels, l_freq=1.0, h_freq=40.0, tmin=0.5, tmax=2.5)
+    agg_test = aggregate_subjects(test_dirs, chosen_channels, l_freq=1.0, h_freq=40.0, tmin=0.5, tmax=2.5)
+    agg_holdout = aggregate_subjects(holdout_dirs, chosen_channels, l_freq=1.0, h_freq=40.0, tmin=0.5, tmax=2.5)
 
-plt.show()
+    # Construction d'un pipeline FBCSP + LDA
+    # On utilise ici 6 sous-bandes dans le FilterBankCSP et 4 composantes par sous-bande.
+    filter_bands = [(8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)]
 
-# --- Traitement global sur plusieurs sujets ---
-subject_dirs = list_subject_dirs(eeg_dir)
-print(f"[INFO] Nombre de sujets trouvés : {len(subject_dirs)}")
 
-# Découpage global par sujet : 60% Training, 20% Test, 20% Holdout
-train_dirs, temp_dirs = train_test_split(subject_dirs, test_size=0.4, random_state=42)
-test_dirs, holdout_dirs = train_test_split(temp_dirs, test_size=0.5, random_state=42)
-print(f"[INFO] Training subjects : {train_dirs}")
-print(f"[INFO] Test subjects : {test_dirs}")
-print(f"[INFO] Holdout subjects : {holdout_dirs}")
+    def build_pipeline_fbcsp():
+        fbcsp = FilterBankCSP(
+            filter_bands=filter_bands,
+            n_components=4,
+            csp_reg='ledoit_wolf',
+            csp_log=True,
+            sfreq=160.0
+        )
+        clf = LDA(solver='lsqr', shrinkage='auto')
+        return Pipeline([('FBCSP', fbcsp), ('LDA', clf)])
 
-# Agrégation des données par catégorie (epochs de 4 s)
-agg_train = aggregate_subjects(train_dirs, channels_to_keep, 8.0, 32.0, 0.0, 4.0)
-agg_test = aggregate_subjects(test_dirs, channels_to_keep, 8.0, 32.0, 0.0, 4.0)
-agg_holdout = aggregate_subjects(holdout_dirs, channels_to_keep, 8.0, 32.0, 0.0, 4.0)
 
-for cat in agg_train:
-    print(f"[INFO] Catégorie {cat} - X_train shape: {agg_train[cat][0].shape}")
+    # On entraîne un modèle pour chacune des 4 catégories
+    models = {}
+    categories = ["mains_reel", "mains_image", "deux_reel", "deux_image"]
+    for cat in categories:
+        if cat not in agg_train:
+            print(f"[WARN] Pas de data train pour cat={cat}, skip.")
+            continue
+        if cat not in agg_test:
+            print(f"[WARN] Pas de data test pour cat={cat}, skip.")
+            continue
+        X_train, y_train = agg_train[cat]
+        X_test, y_test = agg_test[cat]
+        print(f"\n[INFO] ============ Catégorie {cat} ============")
+        print(f"[INFO] X_train={X_train.shape}, y_train={y_train.shape}")
+        # Si le jeu d'entraînement ne contient qu'une seule classe, on passe cette catégorie.
+        if len(np.unique(y_train)) < 2:
+            print(f"[WARN] Catégorie {cat} n'a qu'une seule classe dans l'entraînement, on skip cette catégorie.")
+            continue
 
-############################################################################
-# Entraînement de modèles spécialisés par catégorie et sauvegarde
-############################################################################
+        pipeline = build_pipeline_fbcsp()
+        try:
+            cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='accuracy')
+            print(f"[INFO] CV-scores={cv_scores}, mean={cv_scores.mean():.2f}")
+        except Exception as e:
+            print(f"[ERROR] Erreur en cross validation pour {cat}: {e}")
+            continue
 
-models = {}
-for cat in agg_train:
-    print(f"[INFO] Traitement de la catégorie : {cat}")
-    X_train, y_train = agg_train[cat]
-    X_test, y_test = agg_test[cat]
+        pipeline.fit(X_train, y_train)
+        test_score = pipeline.score(X_test, y_test)
+        print(f"[INFO] Test accuracy={test_score:.2f}")
 
-    pipeline = build_pipeline(n_components=4)
-    cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='accuracy')
-    print(f"[INFO] Scores CV pour {cat} : {cv_scores}")
-    print(f"[INFO] Accuracy moyenne CV pour {cat} : {np.mean(cv_scores):.2f}")
+        models[cat] = pipeline
+        with open(f"model_{cat}.pkl", "wb") as ff:
+            pickle.dump(pipeline, ff)
+        print(f"[INFO] Sauvegardé => model_{cat}.pkl")
 
-    pipeline.fit(X_train, y_train)
-    test_score = pipeline.score(X_test, y_test)
-    print(f"[INFO] Accuracy sur Test set pour {cat} : {test_score:.2f}")
-
-    models[cat] = pipeline
-    model_filename = f"model_{cat}.pkl"
-    with open(model_filename, "wb") as f:
-        pickle.dump(pipeline, f)
-    print(f"[INFO] Modèle {cat} sauvegardé dans {model_filename}")
-
-############################################################################
-# Simulation de prédiction en streaming sur le jeu Holdout pour chaque catégorie
-############################################################################
-
-for cat in agg_holdout:
-    X_holdout, y_holdout = agg_holdout[cat]
-    print(f"[INFO] Prédictions sur le jeu Holdout pour la catégorie {cat} :")
-    for i in range(min(10, X_holdout.shape[0])):
-        # Utilisation de np.expand_dims pour s'assurer que l'input est un ndarray
-        X_sample = np.expand_dims(X_holdout[i], axis=0)
-        pred = models[cat].predict(X_sample)
-        print(f"  Epoch {i} - Prédiction: {pred[0]} - Vérité: {y_holdout[i]}")
+    # Prédiction sur le jeu holdout pour chaque catégorie entraînée
+    for cat in models:
+        if cat not in agg_holdout:
+            print(f"[INFO] cat={cat}, pas de data holdout => skip.")
+            continue
+        X_hold, y_hold = agg_holdout[cat]
+        print(f"\n[INFO] HOLDOUT prédictions cat={cat}, shape={X_hold.shape}")
+        pipeline = models[cat]
+        preds = pipeline.predict(X_hold)
+        hold_acc = np.mean(preds == y_hold)
+        print(f"[INFO] Holdout accuracy={hold_acc:.2f}")
+        for i in range(min(10, len(preds))):
+            print(f"Epoch {i} => pred={preds[i]}, true={y_hold[i]}")
