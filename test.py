@@ -453,22 +453,22 @@ if __name__ == "__main__":
         train_dirs, chosen_channels,
         l_freq=1.0,
         h_freq=40.0,
-        tmin=0.5,
-        tmax=3.8)
+        tmin=0.7,
+        tmax=3.5)
     agg_test = aggregate_subjects(
         test_dirs,
         chosen_channels,
         l_freq=1.0,
         h_freq=40.0,
-        tmin=0.5,
-        tmax=3.8)
+        tmin=0.7,
+        tmax=3.5)
     agg_hold = aggregate_subjects(
         holdout_dirs,
         chosen_channels,
         l_freq=1.0,
         h_freq=40.0,
-        tmin=0.5,
-        tmax=3.8)
+        tmin=0.7,
+        tmax=3.5)
 
     # Paramètres de nos sous-bandes (6 bandes)
     # filter_bands = [(8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)] donne 0.62
