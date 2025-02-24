@@ -3,12 +3,17 @@
 
 import os
 
+from deepseek_csp import MyDeepseekCSP
+from gemini_csp import MyGemCSP
+from gpt_csp import MyGptCSP
+from my_csp import MyCSP
+
 ############################################################################
 # Réglages de parallélisation BLAS / OpenMP
 # Sur un AMD 5900X (12 coeurs/24 threads), par exemple on peut mettre 16.
 ############################################################################
-os.environ["OMP_NUM_THREADS"] = "16"
-os.environ["MKL_NUM_THREADS"] = "16"
+os.environ["OMP_NUM_THREADS"] = "20"
+os.environ["MKL_NUM_THREADS"] = "20"
 
 import re
 import warnings
@@ -104,7 +109,7 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
                 X_filt = X_filt_full
 
             # Création et entraînement du CSP
-            csp = CSP(
+            csp = MyCSP(
                 n_components=self.n_components,
                 reg=self.csp_reg,
                 norm_trace=False,
@@ -423,16 +428,27 @@ if __name__ == "__main__":
         fft_ylim=None,
         grid_shape=(8, 8)
     )
-    plt.show()
+    # plt.show()
 
     # Sélection de canaux : ex. on garde tout canal qui contient 'C', 'CP', ou 'FC'
     # possible_keywords = ['C', 'CP', 'FC']
-    # possible_keywords = ['C']
-    # chosen_channels = ['C3..', 'Cz..', 'C4..',] #0.615
-    chosen_channels = ['C3..', 'Cz..', 'C4..', 'C1..', 'C2..', 'Fcz.', 'Fc3.', 'Fc4.', 'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.'] #0.615
+    # chosen_channels = [] #0.619
     # for ch in raw_example.info['ch_names']:
     #     if any(k in ch.upper() for k in possible_keywords):
     #         chosen_channels.append(ch)
+
+
+    # possible_keywords = ['C']
+    # chosen_channels = ['C3..', 'Cz..', 'C4..',] #0.615
+    # chosen_channels = ['C3..', 'Cz..', 'C4..','Cpz.'] #0.615
+    # chosen_channels = ['C3..', 'Cz..', 'C4..', 'C1..', 'C2..', 'Fcz.', 'Fc3.', 'Fc4.', 'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..'] #0.676 avec CSP CUSTOM!  + ncompnent=11 sur 15 canaux!
+    chosen_channels = ['C3..', 'Cz..', 'C4..', 'C1..', 'C2..', 'Fcz.', 'Fc3.', 'Fc4.', 'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..'] #0.655 avec CSP CUSTOM !
+
+    # Sélection à 8 électrodes (C3, Cz, C4, FC3, FC4, CP3, CPz, CP4)
+    chosen_channels_8 = ['C3..', 'Cz..', 'C4..', 'Fc3.', 'Fc4.', 'Cp3.', 'Cpz.', 'Cp4.']
+
+    # Sélection à 6 électrodes (C3, Cz, C4, FC3, FC4, CPz)
+    chosen_channels_6 = ['C3..', 'Cz..', 'C4..', 'Fc3.', 'Fc4.', 'Cpz.']
 
     print(f"[INFO] Nombre de canaux retenus: {len(chosen_channels)} => {chosen_channels}")
 
@@ -472,7 +488,10 @@ if __name__ == "__main__":
 
     # Paramètres de nos sous-bandes (6 bandes)
     # filter_bands = [(8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)] donne 0.62
-    filter_bands = [(8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)] #test sur 3 Cx.. channels = 0.6
+    # filter_bands = [(8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)] #test sur 3 Cx.. channels = 0.676
+    # filter_bands = [(8,13),(13,32)] #test sur 3 Cx.. channels = 0.660
+    filter_bands = [(8,11),(11,13),(13,20),(20,26),(26,32)] #0.679
+    # filter_bands = [(8, 11), (11, 14), (14, 17), (17, 20), (20, 23), (23, 26), (26,29), (29,32)] #test sur 3 Cx.. channels = 0.676
     # filter_bands = [(4,8),(8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)] #test sur 3 Cx.. channels = 0.6
     # filter_bands = [(8, 12), (16,24)] #test sur 3 Cx.. channels = 0.54
 
@@ -483,7 +502,7 @@ if __name__ == "__main__":
         """
         fbcsp = FilterBankCSP(
             filter_bands=filter_bands,
-            n_components=4,
+            n_components=11,
             csp_reg='ledoit_wolf',
              csp_log=True,
             sfreq=160.0,
