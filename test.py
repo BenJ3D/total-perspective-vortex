@@ -424,7 +424,7 @@ if __name__ == "__main__":
             # Évaluation par cross-validation
             try:
                 cv_scores = cross_val_score(pipeline, data, labels, cv=5, scoring='accuracy')
-                print(f"CV-scores: {cv_scores}, mean: {cv_scores.mean():.4f}")
+                print(f"cross-value-scores: {cv_scores}, mean: {cv_scores.mean():.4f}")
             except Exception as e:
                 print(f"[ERROR] Erreur lors du cross_val_score: {e}")
             pipeline.fit(data, labels)
@@ -440,12 +440,15 @@ if __name__ == "__main__":
             except Exception as e:
                 sys.exit(f"[ERROR] Impossible de charger le modèle {model_filename}: {e}")
             print("[INFO] Début de la prédiction en mode simulation temps réel:")
-            # Simulation de streaming : traitement des epochs un par un
+            correct_count = 0
             for i, (epoch, true_label) in enumerate(zip(data, labels)):
                 print(f"just got epoch {i}")
                 pred = pipeline.predict(epoch[None, ...])[0]
-                print(f"[{pred}]")
-                print(f"{true_label}")
+                print(f"Prediction: [{pred}] | True: {true_label}")
+                if pred == true_label:
+                    correct_count += 1
+                current_acc = correct_count / (i + 1)
+                print(f"Cumulative Accuracy: {current_acc:.2%}")
                 time.sleep(0.5)  # délai simulé
         else:
             sys.exit("[ERROR] Mode inconnu. Utilisez 'train' ou 'predict'.")
@@ -509,7 +512,7 @@ if __name__ == "__main__":
         pipeline = build_pipeline_fbcsp()
         try:
             cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='accuracy')
-            print(f"[INFO] CV-scores={cv_scores}, mean={cv_scores.mean():.2f}")
+            print(f"[INFO] cross-value-scores={cv_scores}, mean={cv_scores.mean():.2f}")
         except Exception as e:
             print(f"[ERROR] Erreur cross_val pour {cat}: {e}")
             continue
