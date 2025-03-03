@@ -2,6 +2,21 @@
 # -*- coding: utf-8 -*-
 
 import os
+import re
+import sys
+import warnings
+import pickle
+import time
+import matplotlib
+import matplotlib.pyplot as plt
+import mne
+import numpy as np
+
+from mne.decoding import CSP
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.pipeline import Pipeline
 
 from my_csp import MyCSP
 
@@ -11,26 +26,10 @@ from my_csp import MyCSP
 os.environ["OMP_NUM_THREADS"] = "20"
 os.environ["MKL_NUM_THREADS"] = "20"
 
-import re
-import warnings
-import pickle
-import matplotlib
-import matplotlib.pyplot as plt
-import mne
-import numpy as np
-import time
-
-from mne.decoding import CSP
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.pipeline import Pipeline
-
 ############################################################################
 # Constante minimale pour la longueur du signal pour le filtrage.
 ############################################################################
 MIN_SIGNAL_LENGTH = 265
-
 
 ############################################################################
 # 1) Classe FilterBankCSP
@@ -41,9 +40,6 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
     Pour chaque sous-bande (définie dans filter_bands), on entraîne un CSP séparé.
     Lors du transform, on filtre, on applique le CSP et on concatène les features.
     X doit avoir la forme (n_trials, n_channels, n_times).
-
-    L'héritage de BaseEstimator et TransformerMixin permet d'utiliser
-    get_params/set_params et d'intégrer la classe dans l'écosystème sklearn.
     """
     def __init__(self,
                  filter_bands=[(8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)],
@@ -105,7 +101,6 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
             X_features_list.append(X_csp)
         return np.concatenate(X_features_list, axis=1)
 
-
 ############################################################################
 # 2) Fonctions d'affichage (EEG et FFT)
 ############################################################################
@@ -153,7 +148,6 @@ def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
     plt.tight_layout()
     return fig_time, fig_fft
 
-
 ############################################################################
 # 3) Gestion des runs et catégorisation en 7 expériences
 ############################################################################
@@ -187,7 +181,6 @@ def get_run_category(file_name):
             return "exp5"
     return None
 
-
 ############################################################################
 # 4) Chargement EDF, filtrage et découpage en epochs
 ############################################################################
@@ -219,7 +212,6 @@ def process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin=0.5, tmax=2.5,
         epochs = epochs[good_idx]
     return epochs
 
-
 ############################################################################
 # 5) Traitement d'un sujet complet
 ############################################################################
@@ -247,7 +239,6 @@ def process_subject(subject_dir, channels_to_keep, l_freq, h_freq, tmin, tmax):
                 continue
             file_path = os.path.join(subject_dir, f)
             if exp == "exp_baseline":
-                # Traitement spécifique pour les runs baseline
                 try:
                     raw = mne.io.read_raw_edf(file_path, preload=True, verbose=False)
                 except Exception as e:
@@ -256,11 +247,9 @@ def process_subject(subject_dir, channels_to_keep, l_freq, h_freq, tmin, tmax):
                 raw.pick(channels_to_keep)
                 raw.set_eeg_reference('average', projection=False, verbose=False)
                 raw.filter(l_freq=l_freq, h_freq=h_freq, fir_design='firwin', verbose=False)
-                # Segmenter le signal en epochs de durée fixe (ici 2.5 secondes)
                 duration = 2.5
                 epochs = mne.make_fixed_length_epochs(raw, duration=duration, preload=True, verbose=False)
                 data = epochs.get_data()
-                # Récupérer le numéro de run depuis le nom du fichier
                 m_obj = re.search(r'R(\d+)', f)
                 if m_obj:
                     run_number = int(m_obj.group(1))
@@ -268,9 +257,9 @@ def process_subject(subject_dir, channels_to_keep, l_freq, h_freq, tmin, tmax):
                     print(f"[WARNING] Impossible de déterminer le numéro de run pour {f}")
                     continue
                 if run_number == 1:
-                    labels = np.ones(data.shape[0], dtype=int)  # yeux ouverts -> label 1
+                    labels = np.ones(data.shape[0], dtype=int)
                 elif run_number == 2:
-                    labels = 2 * np.ones(data.shape[0], dtype=int)  # yeux fermés -> label 2
+                    labels = 2 * np.ones(data.shape[0], dtype=int)
                 else:
                     continue
                 cat_epochs[exp].append((data, labels))
@@ -280,7 +269,6 @@ def process_subject(subject_dir, channels_to_keep, l_freq, h_freq, tmin, tmax):
                 if epochs is not None and len(epochs) > 0:
                     data = epochs.get_data()
                     events = epochs.events[:, 2]
-                    # Garder uniquement T1 et T2
                     idx = (events == 1) | (events == 2)
                     if not np.any(idx):
                         continue
@@ -306,7 +294,6 @@ def process_subject(subject_dir, channels_to_keep, l_freq, h_freq, tmin, tmax):
         print(f"[INFO] Subject {os.path.basename(subject_dir)} - {cat}: {X_all.shape[0]} epochs")
     return out if len(out) > 0 else None
 
-
 ############################################################################
 # 6) Agrégation multi-sujets
 ############################################################################
@@ -318,7 +305,6 @@ def list_subject_dirs(eeg_dir):
             dirs.append(path)
     dirs.sort()
     return dirs
-
 
 def aggregate_subjects(subject_dirs, channels, l_freq, h_freq, tmin, tmax):
     agg = {
@@ -353,15 +339,122 @@ def aggregate_subjects(subject_dirs, channels, l_freq, h_freq, tmin, tmax):
         print(f"[INFO] Cat={cat}: total epochs={X_all.shape[0]}, time={min_length}")
     return out
 
+############################################################################
+# 7) Construction du pipeline FBCSP + LDA
+############################################################################
+def build_pipeline_fbcsp():
+    filter_bands = [(8, 11), (11, 13), (13, 20), (20, 26), (26, 32)]
+    fbcsp = FilterBankCSP(
+        filter_bands=filter_bands,
+        n_components=11,
+        csp_reg='ledoit_wolf',
+        csp_log=True,
+        sfreq=160.0,
+        n_jobs=16
+    )
+    clf = LDA(solver='lsqr', shrinkage='auto')
+    return Pipeline([
+        ('FBCSP', fbcsp),
+        ('LDA', clf)
+    ])
 
 ############################################################################
-# 7) Construction du pipeline FBCSP + LDA et exécution
+# 8) Main
 ############################################################################
 if __name__ == "__main__":
     matplotlib.use("TkAgg")
     eeg_dir = os.getenv("EEG_DIR", "")
     print(f"[INFO] EEG_DIR={eeg_dir}")
+
+    # Définition de quelques paramètres communs
+    chosen_channels = ['C3..', 'Cz..', 'C4..', 'C1..', 'C2..', 'Fcz.', 'Fc3.', 'Fc4.',
+                         'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
+    l_freq = 1.0
+    h_freq = 40.0
+
+    # Si des arguments sont passés, on exécute le mode single-subject/run
+    if len(sys.argv) >= 4:
+        subject_id = sys.argv[1]
+        run_id = sys.argv[2]
+        mode = sys.argv[3].lower()  # "train" ou "predict"
+        subject_folder = "S" + subject_id.zfill(3)
+        file_name = f"{subject_folder}R{run_id}.edf"
+        full_path = os.path.join(eeg_dir, subject_folder, file_name)
+        print(f"[INFO] Mode {mode} pour le sujet {subject_folder} et le run {run_id}")
+
+        # Vérification du type de run : baseline si run_id<=2, sinon tâche
+        if int(run_id) <= 2:
+            try:
+                raw = mne.io.read_raw_edf(full_path, preload=True, verbose=False)
+            except Exception as e:
+                sys.exit(f"[ERROR] Impossible de charger le fichier {full_path}: {e}")
+            raw.pick(chosen_channels)
+            raw.set_eeg_reference('average', projection=False, verbose=False)
+            raw.filter(l_freq=l_freq, h_freq=h_freq, fir_design='firwin', verbose=False)
+            duration = 2.5
+            epochs = mne.make_fixed_length_epochs(raw, duration=duration, preload=True, verbose=False)
+            data = epochs.get_data()
+            m_obj = re.search(r'R(\d+)', file_name)
+            if m_obj:
+                run_number = int(m_obj.group(1))
+            else:
+                sys.exit("[ERROR] Impossible de déterminer le numéro de run")
+            if run_number == 1:
+                labels = np.ones(data.shape[0], dtype=int)  # yeux ouverts -> label 1
+            elif run_number == 2:
+                labels = 2 * np.ones(data.shape[0], dtype=int)  # yeux fermés -> label 2
+            else:
+                sys.exit("[ERROR] Run inconnu pour baseline")
+        else:
+            epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin=0.7, tmax=3.5)
+            if epochs is None:
+                sys.exit("[ERROR] Aucun epoch trouvé dans le fichier.")
+            data = epochs.get_data()
+            events = epochs.events[:, 2]
+            idx = (events == 1) | (events == 2)
+            if not np.any(idx):
+                sys.exit("[ERROR] Aucune epoch avec T1/T2 dans le fichier.")
+            data = data[idx]
+            labels = events[idx]
+
+        pipeline = build_pipeline_fbcsp()
+        model_filename = f"model_{subject_folder}R{run_id}.pkl"
+
+        if mode == "train":
+            # Évaluation par cross-validation
+            try:
+                cv_scores = cross_val_score(pipeline, data, labels, cv=5, scoring='accuracy')
+                print(f"CV-scores: {cv_scores}, mean: {cv_scores.mean():.4f}")
+            except Exception as e:
+                print(f"[ERROR] Erreur lors du cross_val_score: {e}")
+            pipeline.fit(data, labels)
+            train_acc = pipeline.score(data, labels)
+            print(f"Train accuracy: {train_acc:.4f}")
+            with open(model_filename, "wb") as ff:
+                pickle.dump(pipeline, ff)
+            print(f"[INFO] Modèle sauvegardé => {model_filename}")
+        elif mode == "predict":
+            try:
+                with open(model_filename, "rb") as ff:
+                    pipeline = pickle.load(ff)
+            except Exception as e:
+                sys.exit(f"[ERROR] Impossible de charger le modèle {model_filename}: {e}")
+            print("[INFO] Début de la prédiction en mode simulation temps réel:")
+            # Simulation de streaming : traitement des epochs un par un
+            for i, (epoch, true_label) in enumerate(zip(data, labels)):
+                print(f"just got epoch {i}")
+                pred = pipeline.predict(epoch[None, ...])[0]
+                print(f"[{pred}]")
+                print(f"{true_label}")
+                time.sleep(0.5)  # délai simulé
+        else:
+            sys.exit("[ERROR] Mode inconnu. Utilisez 'train' ou 'predict'.")
+        sys.exit(0)
+
+    # Sinon, si aucun argument n'est fourni, on exécute le pipeline multi-sujets
+    print("[INFO] Exécution du pipeline multi-sujets...")
     start_time = time.time()
+
     # Test/affichage sur S001R01
     test_subj = "S001"
     test_run = "S001R01.edf"
@@ -380,12 +473,7 @@ if __name__ == "__main__":
     )
     # plt.show()
 
-    # Sélection des canaux
-    chosen_channels = ['C3..', 'Cz..', 'C4..', 'C1..', 'C2..', 'Fcz.', 'Fc3.', 'Fc4.',
-                         'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
     print(f"[INFO] Nombre de canaux retenus: {len(chosen_channels)} => {chosen_channels}")
-
-    # Listing des sujets
     subject_dirs = list_subject_dirs(eeg_dir)
     print(f"[INFO] {len(subject_dirs)} sujets trouvés.")
 
@@ -396,30 +484,9 @@ if __name__ == "__main__":
     print(f"[INFO] Test: {test_dirs}")
     print(f"[INFO] Holdout: {holdout_dirs}")
 
-    # Agrégation
-    # Pour les runs non-baseline, on utilise tmin et tmax (ex: 0.7 à 3.5 s)
-    agg_train = aggregate_subjects(train_dirs, chosen_channels, l_freq=1.0, h_freq=40.0, tmin=0.7, tmax=3.5)
-    agg_test = aggregate_subjects(test_dirs, chosen_channels, l_freq=1.0, h_freq=40.0, tmin=0.7, tmax=3.5)
-    agg_hold = aggregate_subjects(holdout_dirs, chosen_channels, l_freq=1.0, h_freq=40.0, tmin=0.7, tmax=3.5)
-
-    # Exemple de sous-bandes
-    filter_bands = [(8, 11), (11, 13), (13, 20), (20, 26), (26, 32)]
-    # filter_bands = [(8,13), (13,32)]
-
-    def build_pipeline_fbcsp():
-        fbcsp = FilterBankCSP(
-            filter_bands=filter_bands,
-            n_components=11,
-            csp_reg='ledoit_wolf',
-            csp_log=True,
-            sfreq=160.0,
-            n_jobs=16
-        )
-        clf = LDA(solver='lsqr', shrinkage='auto')
-        return Pipeline([
-            ('FBCSP', fbcsp),
-            ('LDA', clf)
-        ])
+    agg_train = aggregate_subjects(train_dirs, chosen_channels, l_freq, h_freq, tmin=0.7, tmax=3.5)
+    agg_test = aggregate_subjects(test_dirs, chosen_channels, l_freq, h_freq, tmin=0.7, tmax=3.5)
+    agg_hold = aggregate_subjects(holdout_dirs, chosen_channels, l_freq, h_freq, tmin=0.7, tmax=3.5)
 
     # Liste des 7 expériences (incluant la baseline)
     categories = ["exp_baseline", "exp0", "exp1", "exp2", "exp3", "exp4", "exp5"]
