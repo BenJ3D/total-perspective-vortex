@@ -155,35 +155,35 @@ def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
 
 
 ############################################################################
-# 3) Gestion des runs et catégorisation en 6 expériences
+# 3) Gestion des runs et catégorisation en 7 expériences
 ############################################################################
 def get_run_category(file_name):
     """
     Retourne une étiquette d'expérience selon le numéro de run :
-      - R1 et R2 (baselines) sont ignorés (retourne None)
-      - R3, R4 -> "exp0"
-      - R5, R6 -> "exp1"
-      - R7, R8 -> "exp2"
-      - R9, R10 -> "exp3"
-      - R11, R12 -> "exp4"
-      - R13, R14 -> "exp5"
+    - R1,R2: Baseline (yeux ouverts/fermés) => "exp_baseline"
+    - R3,R4: "exp0" - Tâches unilatérales (mouvement de main : poing gauche ou droit; réel / imagé)
+    - R5,R6: "exp1" - Tâches bilatérales (mouvement à la fois de mains ou de pieds; réel / imagé)
+    - R7,R8: "exp2" - Répétition des tâches unilatérales (réel / imagé)
+    - R9,R10: "exp3" - Répétition des tâches bilatérales (réel / imagé)
+    - R11,R12: "exp4" - Nouvelle répétition des tâches unilatérales (réel / imagé)
+    - R13,R14: "exp5" - Nouvelle répétition des tâches bilatérales (réel / imagé)
     """
     m_obj = re.search(r'R(\d+)', file_name)
     if m_obj:
         run = int(m_obj.group(1))
         if run <= 2:
-            return None
-        if run in [3,4]:
+            return "exp_baseline"
+        if run in [3, 4]:
             return "exp0"
-        elif run in [5,6]:
+        elif run in [5, 6]:
             return "exp1"
-        elif run in [7,8]:
+        elif run in [7, 8]:
             return "exp2"
-        elif run in [9,10]:
+        elif run in [9, 10]:
             return "exp3"
-        elif run in [11,12]:
+        elif run in [11, 12]:
             return "exp4"
-        elif run in [13,14]:
+        elif run in [13, 14]:
             return "exp5"
     return None
 
@@ -199,7 +199,7 @@ def process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin=0.5, tmax=2.5,
     if do_reref:
         raw.set_eeg_reference('average', projection=False, verbose=False)
     raw.filter(l_freq=l_freq, h_freq=h_freq, fir_design='firwin', verbose=False)
-    # On récupère T0, T1, T2
+    # Récupérer T0, T1, T2
     events, event_id = mne.events_from_annotations(raw, verbose=False)
     selected_event_id = {k: v for k, v in event_id.items() if k in ['T0', 'T1', 'T2']}
     if len(selected_event_id) == 0:
@@ -226,10 +226,13 @@ def process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin=0.5, tmax=2.5,
 def process_subject(subject_dir, channels_to_keep, l_freq, h_freq, tmin, tmax):
     """
     Parcourt les fichiers .edf du dossier subject_dir et regroupe les epochs par
-    expérience (exp0 à exp5). Pour chaque fichier, on garde uniquement les epochs
-    dont l'événement est T1 ou T2 (les tâches) et on conserve les labels d'origine.
+    expérience (exp_baseline, exp0 à exp5). Pour les runs non-baseline, on garde uniquement les epochs
+    dont l'événement est T1 ou T2.
+    Pour les runs baseline (R1 et R2), on segmente le signal en epochs fixes et on assigne
+    le label en fonction du run (R1: yeux ouverts -> label 1, R2: yeux fermés -> label 2).
     """
     cat_epochs = {
+        "exp_baseline": [],
         "exp0": [],
         "exp1": [],
         "exp2": [],
@@ -243,20 +246,50 @@ def process_subject(subject_dir, channels_to_keep, l_freq, h_freq, tmin, tmax):
             if exp is None:
                 continue
             file_path = os.path.join(subject_dir, f)
-            epochs = process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin, tmax, do_reref=True)
-            if epochs is not None and len(epochs) > 0:
-                data = epochs.get_data()
-                events = epochs.events[:, 2]
-                # Garder uniquement T1 et T2
-                idx = (events == 1) | (events == 2)
-                if not np.any(idx):
+            if exp == "exp_baseline":
+                # Traitement spécifique pour les runs baseline
+                try:
+                    raw = mne.io.read_raw_edf(file_path, preload=True, verbose=False)
+                except Exception as e:
+                    print(f"[ERROR] Impossible de charger {file_path}: {e}")
                     continue
-                data = data[idx]
-                labels = events[idx]
+                raw.pick(channels_to_keep)
+                raw.set_eeg_reference('average', projection=False, verbose=False)
+                raw.filter(l_freq=l_freq, h_freq=h_freq, fir_design='firwin', verbose=False)
+                # Segmenter le signal en epochs de durée fixe (ici 2.5 secondes)
+                duration = 2.5
+                epochs = mne.make_fixed_length_epochs(raw, duration=duration, preload=True, verbose=False)
+                data = epochs.get_data()
+                # Récupérer le numéro de run depuis le nom du fichier
+                m_obj = re.search(r'R(\d+)', f)
+                if m_obj:
+                    run_number = int(m_obj.group(1))
+                else:
+                    print(f"[WARNING] Impossible de déterminer le numéro de run pour {f}")
+                    continue
+                if run_number == 1:
+                    labels = np.ones(data.shape[0], dtype=int)  # yeux ouverts -> label 1
+                elif run_number == 2:
+                    labels = 2 * np.ones(data.shape[0], dtype=int)  # yeux fermés -> label 2
+                else:
+                    continue
                 cat_epochs[exp].append((data, labels))
-                print(f"[INFO] {f}: {len(data)} epochs -> {exp}")
+                print(f"[INFO] {f}: {len(data)} epochs -> {exp} (baseline)")
             else:
-                print(f"[INFO] {f}: 0 epoch -> ignoré.")
+                epochs = process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin, tmax, do_reref=True)
+                if epochs is not None and len(epochs) > 0:
+                    data = epochs.get_data()
+                    events = epochs.events[:, 2]
+                    # Garder uniquement T1 et T2
+                    idx = (events == 1) | (events == 2)
+                    if not np.any(idx):
+                        continue
+                    data = data[idx]
+                    labels = events[idx]
+                    cat_epochs[exp].append((data, labels))
+                    print(f"[INFO] {f}: {len(data)} epochs -> {exp}")
+                else:
+                    print(f"[INFO] {f}: 0 epoch -> ignoré.")
     out = {}
     for cat in cat_epochs:
         if len(cat_epochs[cat]) == 0:
@@ -289,6 +322,7 @@ def list_subject_dirs(eeg_dir):
 
 def aggregate_subjects(subject_dirs, channels, l_freq, h_freq, tmin, tmax):
     agg = {
+        "exp_baseline": [],
         "exp0": [],
         "exp1": [],
         "exp2": [],
@@ -348,7 +382,7 @@ if __name__ == "__main__":
 
     # Sélection des canaux
     chosen_channels = ['C3..', 'Cz..', 'C4..', 'C1..', 'C2..', 'Fcz.', 'Fc3.', 'Fc4.',
-                       'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
+                         'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
     print(f"[INFO] Nombre de canaux retenus: {len(chosen_channels)} => {chosen_channels}")
 
     # Listing des sujets
@@ -363,12 +397,13 @@ if __name__ == "__main__":
     print(f"[INFO] Holdout: {holdout_dirs}")
 
     # Agrégation
+    # Pour les runs non-baseline, on utilise tmin et tmax (ex: 0.7 à 3.5 s)
     agg_train = aggregate_subjects(train_dirs, chosen_channels, l_freq=1.0, h_freq=40.0, tmin=0.7, tmax=3.5)
     agg_test = aggregate_subjects(test_dirs, chosen_channels, l_freq=1.0, h_freq=40.0, tmin=0.7, tmax=3.5)
     agg_hold = aggregate_subjects(holdout_dirs, chosen_channels, l_freq=1.0, h_freq=40.0, tmin=0.7, tmax=3.5)
 
     # Exemple de sous-bandes
-    filter_bands = [(8,11), (11,13), (13,20), (20,26), (26,32)]
+    filter_bands = [(8, 11), (11, 13), (13, 20), (20, 26), (26, 32)]
     # filter_bands = [(8,13), (13,32)]
 
     def build_pipeline_fbcsp():
@@ -386,8 +421,8 @@ if __name__ == "__main__":
             ('LDA', clf)
         ])
 
-    # Liste des 6 expériences
-    categories = ["exp0", "exp1", "exp2", "exp3", "exp4", "exp5"]
+    # Liste des 7 expériences (incluant la baseline)
+    categories = ["exp_baseline", "exp0", "exp1", "exp2", "exp3", "exp4", "exp5"]
     models = {}
 
     for cat in categories:
@@ -436,11 +471,9 @@ if __name__ == "__main__":
             print(f"Epoch {i} => pred={preds[i]}, true={y_hold[i]}")
     if holdout_accuracies:
         moyenne = np.mean(holdout_accuracies)
-        print(f"\n[INFO] Moyenne holdout accuracy des 6 modèles : {moyenne:.3f}")
+        print(f"\n[INFO] Moyenne holdout accuracy des modèles : {moyenne:.3f}")
     end_time = time.time()
     elapsed_time = end_time - start_time
     minutes = int(elapsed_time // 60)
     seconds = int(elapsed_time % 60)
     print(f"\n[INFO] Temps total d'exécution : {minutes}:{seconds:02d} (min:ss)")
-
-
