@@ -8,6 +8,7 @@ import warnings
 import pickle
 import time
 import matplotlib
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import mne
 import numpy as np
@@ -23,8 +24,8 @@ from my_csp import MyCSP
 ############################################################################
 # Réglages de parallélisation BLAS / OpenMP
 ############################################################################
-os.environ["OMP_NUM_THREADS"] = "20"
-os.environ["MKL_NUM_THREADS"] = "20"
+os.environ["OMP_NUM_THREADS"] = "12"
+os.environ["MKL_NUM_THREADS"] = "12"
 
 ############################################################################
 # Constante minimale pour la longueur du signal pour le filtrage.
@@ -70,13 +71,9 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
         self._csps = []
         X_use, orig_length = self._pad_if_needed(X)
         for (l_freq, h_freq) in self.filter_bands:
-            X_filt_full = mne.filter.filter_data(
-                data=X_use,
-                sfreq=self.sfreq,
-                l_freq=l_freq,
-                h_freq=h_freq,
-                verbose=False,
-                n_jobs=self.n_jobs)
+            X_filt_full = mne.filter.filter_data(data=X_use, sfreq=self.sfreq,
+                                                 l_freq=l_freq, h_freq=h_freq,
+                                                 verbose=False, n_jobs=self.n_jobs)
             X_filt = X_filt_full[..., :orig_length] if orig_length is not None else X_filt_full
             csp = MyCSP(n_components=self.n_components, reg=self.csp_reg,
                         norm_trace=False, log=self.csp_log)
@@ -89,13 +86,9 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
         X_use, orig_length = self._pad_if_needed(X)
         X_features_list = []
         for (l_freq, h_freq, csp) in self._csps:
-            X_filt_full = mne.filter.filter_data(
-                data=X_use,
-                sfreq=self.sfreq,
-                l_freq=l_freq,
-                h_freq=h_freq,
-                verbose=False,
-                n_jobs=self.n_jobs)
+            X_filt_full = mne.filter.filter_data(data=X_use, sfreq=self.sfreq,
+                                                 l_freq=l_freq, h_freq=h_freq,
+                                                 verbose=False, n_jobs=self.n_jobs)
             X_filt = X_filt_full[..., :orig_length] if orig_length is not None else X_filt_full
             X_csp = csp.transform(X_filt)
             X_features_list.append(X_csp)
@@ -104,6 +97,21 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
 ############################################################################
 # 2) Fonctions d'affichage (EEG et FFT)
 ############################################################################
+def plot_combined_spectrum(data, sfreq, title="Combined Frequency Spectrum"):
+    """
+    Calcule et affiche la transformée de Fourier moyenne sur tous les canaux.
+    """
+    fft_vals = np.abs(np.fft.rfft(data, axis=1))
+    avg_spectrum = np.mean(fft_vals, axis=0)
+    freqs = np.fft.rfftfreq(data.shape[1], d=1/sfreq)
+    plt.figure()
+    plt.plot(freqs, avg_spectrum)
+    plt.title(title)
+    plt.xlabel("Fréquence (Hz)")
+    plt.ylabel("Amplitude moyenne")
+    plt.xlim(0, 80)
+    plt.show()
+
 def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
                                     time_ylim=None, freq_xlim=(0, 100),
                                     fft_ylim=None, grid_shape=None,
@@ -146,27 +154,28 @@ def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
         if fft_ylim is not None:
             axs_fft[i].set_ylim(fft_ylim)
     plt.tight_layout()
+    plt.show()
     return fig_time, fig_fft
 
 ############################################################################
-# 3) Gestion des runs et catégorisation en 7 expériences
+# 3) Gestion des runs et catégorisation en 6 expériences
 ############################################################################
 def get_run_category(file_name):
     """
     Retourne une étiquette d'expérience selon le numéro de run :
-    - R1,R2: Baseline (yeux ouverts/fermés) => "exp_baseline"
-    - R3,R4: "exp0" - Tâches unilatérales (mouvement de main : poing gauche ou droit; réel / imagé)
-    - R5,R6: "exp1" - Tâches bilatérales (mouvement à la fois de mains ou de pieds; réel / imagé)
-    - R7,R8: "exp2" - Répétition des tâches unilatérales (réel / imagé)
-    - R9,R10: "exp3" - Répétition des tâches bilatérales (réel / imagé)
-    - R11,R12: "exp4" - Nouvelle répétition des tâches unilatérales (réel / imagé)
-    - R13,R14: "exp5" - Nouvelle répétition des tâches bilatérales (réel / imagé)
+    - R1,R2: Baseline (ignoré)
+    - R3,R4: "exp0" - Tâches unilatérales (mouvement de main ou imagerie)
+    - R5,R6: "exp1" - Tâches bilatérales (mouvement de mains ou pieds, réel/imagé)
+    - R7,R8: "exp2" - Répétition des tâches unilatérales
+    - R9,R10: "exp3" - Répétition des tâches bilatérales
+    - R11,R12: "exp4" - Nouvelle répétition des tâches unilatérales
+    - R13,R14: "exp5" - Nouvelle répétition des tâches bilatérales
     """
     m_obj = re.search(r'R(\d+)', file_name)
     if m_obj:
         run = int(m_obj.group(1))
         if run <= 2:
-            return "exp_baseline"
+            return None  # on ignore les baselines
         if run in [3, 4]:
             return "exp0"
         elif run in [5, 6]:
@@ -192,15 +201,13 @@ def process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin=0.5, tmax=2.5,
     if do_reref:
         raw.set_eeg_reference('average', projection=False, verbose=False)
     raw.filter(l_freq=l_freq, h_freq=h_freq, fir_design='firwin', verbose=False)
-    # Récupérer T0, T1, T2
     events, event_id = mne.events_from_annotations(raw, verbose=False)
     selected_event_id = {k: v for k, v in event_id.items() if k in ['T0', 'T1', 'T2']}
     if len(selected_event_id) == 0:
         print(f"[WARNING] Aucun événement T0/T1/T2 dans {file_path}")
         return None
-    epochs = mne.Epochs(raw, events, event_id=selected_event_id,
-                        tmin=tmin, tmax=tmax, baseline=None,
-                        preload=True, verbose=False, on_missing='ignore')
+    epochs = mne.Epochs(raw, events, event_id=selected_event_id, tmin=tmin, tmax=tmax,
+                        baseline=None, preload=True, verbose=False, on_missing='ignore')
     sfreq = raw.info['sfreq']
     expected_n_times = int(round((tmax - tmin) * sfreq)) + 1
     data = epochs.get_data()
@@ -218,73 +225,35 @@ def process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin=0.5, tmax=2.5,
 def process_subject(subject_dir, channels_to_keep, l_freq, h_freq, tmin, tmax):
     """
     Parcourt les fichiers .edf du dossier subject_dir et regroupe les epochs par
-    expérience (exp_baseline, exp0 à exp5). Pour les runs non-baseline, on garde uniquement les epochs
-    dont l'événement est T1 ou T2.
-    Pour les runs baseline (R1 et R2), on segmente le signal en epochs fixes et on assigne
-    le label en fonction du run (R1: yeux ouverts -> label 1, R2: yeux fermés -> label 2).
+    expérience (exp0 à exp5). Les runs baseline (R1 et R2) sont ignorés.
+    Pour chaque run non-baseline, on garde uniquement les epochs dont l'événement est T1 ou T2.
     """
-    cat_epochs = {
-        "exp_baseline": [],
-        "exp0": [],
-        "exp1": [],
-        "exp2": [],
-        "exp3": [],
-        "exp4": [],
-        "exp5": []
-    }
+    cat_epochs = {"exp0": [], "exp1": [], "exp2": [], "exp3": [], "exp4": [], "exp5": []}
     for f in os.listdir(subject_dir):
         if f.endswith(".edf"):
             exp = get_run_category(f)
             if exp is None:
                 continue
             file_path = os.path.join(subject_dir, f)
-            if exp == "exp_baseline":
-                try:
-                    raw = mne.io.read_raw_edf(file_path, preload=True, verbose=False)
-                except Exception as e:
-                    print(f"[ERROR] Impossible de charger {file_path}: {e}")
-                    continue
-                raw.pick(channels_to_keep)
-                raw.set_eeg_reference('average', projection=False, verbose=False)
-                raw.filter(l_freq=l_freq, h_freq=h_freq, fir_design='firwin', verbose=False)
-                duration = 2.5
-                epochs = mne.make_fixed_length_epochs(raw, duration=duration, preload=True, verbose=False)
+            epochs = process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin, tmax, do_reref=True)
+            if epochs is not None and len(epochs) > 0:
                 data = epochs.get_data()
-                m_obj = re.search(r'R(\d+)', f)
-                if m_obj:
-                    run_number = int(m_obj.group(1))
-                else:
-                    print(f"[WARNING] Impossible de déterminer le numéro de run pour {f}")
+                events = epochs.events[:, 2]
+                idx = (events == 1) | (events == 2)
+                if not np.any(idx):
                     continue
-                if run_number == 1:
-                    labels = np.ones(data.shape[0], dtype=int)
-                elif run_number == 2:
-                    labels = 2 * np.ones(data.shape[0], dtype=int)
-                else:
-                    continue
+                data = data[idx]
+                labels = events[idx]
                 cat_epochs[exp].append((data, labels))
-                print(f"[INFO] {f}: {len(data)} epochs -> {exp} (baseline)")
+                print(f"[INFO] {f}: {len(data)} epochs -> {exp}")
             else:
-                epochs = process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin, tmax, do_reref=True)
-                if epochs is not None and len(epochs) > 0:
-                    data = epochs.get_data()
-                    events = epochs.events[:, 2]
-                    idx = (events == 1) | (events == 2)
-                    if not np.any(idx):
-                        continue
-                    data = data[idx]
-                    labels = events[idx]
-                    cat_epochs[exp].append((data, labels))
-                    print(f"[INFO] {f}: {len(data)} epochs -> {exp}")
-                else:
-                    print(f"[INFO] {f}: 0 epoch -> ignoré.")
+                print(f"[INFO] {f}: 0 epoch -> ignoré.")
     out = {}
     for cat in cat_epochs:
         if len(cat_epochs[cat]) == 0:
             continue
         min_length = min(x[0].shape[-1] for x in cat_epochs[cat])
-        X_list = []
-        y_list = []
+        X_list, y_list = [], []
         for (X_c, y_c) in cat_epochs[cat]:
             X_list.append(X_c[..., :min_length])
             y_list.append(y_c)
@@ -302,20 +271,12 @@ def list_subject_dirs(eeg_dir):
     for d in os.listdir(eeg_dir):
         path = os.path.join(eeg_dir, d)
         if os.path.isdir(path) and d.startswith("S") and len(d) == 4:
-            dirs.append(path)
+            dirs.append(d)
     dirs.sort()
-    return dirs
+    return [os.path.join(eeg_dir, d) for d in dirs]
 
 def aggregate_subjects(subject_dirs, channels, l_freq, h_freq, tmin, tmax):
-    agg = {
-        "exp_baseline": [],
-        "exp0": [],
-        "exp1": [],
-        "exp2": [],
-        "exp3": [],
-        "exp4": [],
-        "exp5": []
-    }
+    agg = {"exp0": [], "exp1": [], "exp2": [], "exp3": [], "exp4": [], "exp5": []}
     for sd in subject_dirs:
         data_sub = process_subject(sd, channels, l_freq, h_freq, tmin, tmax)
         if data_sub is not None:
@@ -328,8 +289,7 @@ def aggregate_subjects(subject_dirs, channels, l_freq, h_freq, tmin, tmax):
         if len(agg[cat]) == 0:
             continue
         min_length = min(x[0].shape[-1] for x in agg[cat])
-        X_list = []
-        y_list = []
+        X_list, y_list = [], []
         for (X_c, y_c) in agg[cat]:
             X_list.append(X_c[..., :min_length])
             y_list.append(y_c)
@@ -344,35 +304,136 @@ def aggregate_subjects(subject_dirs, channels, l_freq, h_freq, tmin, tmax):
 ############################################################################
 def build_pipeline_fbcsp():
     filter_bands = [(8, 11), (11, 13), (13, 20), (20, 26), (26, 32)]
-    fbcsp = FilterBankCSP(
-        filter_bands=filter_bands,
-        n_components=11,
-        csp_reg='ledoit_wolf',
-        csp_log=True,
-        sfreq=160.0,
-        n_jobs=16
-    )
+    fbcsp = FilterBankCSP(filter_bands=filter_bands,
+                          n_components=11,
+                          csp_reg='ledoit_wolf',
+                          csp_log=True,
+                          sfreq=160.0,
+                          n_jobs=16)
     clf = LDA(solver='lsqr', shrinkage='auto')
-    return Pipeline([
-        ('FBCSP', fbcsp),
-        ('LDA', clf)
-    ])
+    return Pipeline([('FBCSP', fbcsp), ('LDA', clf)])
 
 ############################################################################
 # 8) Main
 ############################################################################
 if __name__ == "__main__":
-    matplotlib.use("TkAgg")
     eeg_dir = os.getenv("EEG_DIR", "")
     print(f"[INFO] EEG_DIR={eeg_dir}")
 
-    # Définition de quelques paramètres communs
+    # Variables communes
     chosen_channels = ['C3..', 'Cz..', 'C4..', 'C1..', 'C2..', 'Fcz.', 'Fc3.', 'Fc4.',
-                         'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
+                       'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
     l_freq = 1.0
     h_freq = 40.0
+    tmin, tmax = 0.7, 3.5
 
-    # Si des arguments sont passés, on exécute le mode single-subject/run
+    # Mode par défaut : sans argument, ne rien faire.
+    if len(sys.argv) == 1:
+        sys.exit(0)
+
+    # Mode avec un seul argument
+    if len(sys.argv) == 2:
+        mode_main = sys.argv[1].lower()
+        if mode_main == "analyse":
+            # Choix d'un run significatif (par exemple S001R03.edf)
+            test_subj = "S001"
+            test_run = "S001R03.edf"
+            path_example = os.path.join(eeg_dir, test_subj, test_run)
+            try:
+                raw_example = mne.io.read_raw_edf(path_example, preload=True)
+            except Exception as e:
+                sys.exit(f"[ERROR] Impossible de charger {path_example}: {e}")
+            print("[INFO] Affichage du spectre de fréquence brut (moyenne sur 64 canaux)...")
+            data_raw, _ = raw_example[:]
+            plot_combined_spectrum(data_raw, raw_example.info['sfreq'],
+                                   title="Spectre brut (moyenne sur canaux)")
+            raw_example.filter(l_freq=1.0, h_freq=40.0, fir_design='firwin', verbose=False)
+            print("[INFO] Affichage du spectre de fréquence filtré (1-40Hz)...")
+            data_filt, _ = raw_example[:]
+            plot_combined_spectrum(data_filt, raw_example.info['sfreq'],
+                                   title="Spectre filtré (1-40Hz, moyenne sur canaux)")
+            print("[INFO] Affichage interactif des epochs...")
+            events, event_id = mne.events_from_annotations(raw_example, verbose=False)
+            selected_event_id = {k: v for k, v in event_id.items() if k in ['T0', 'T1', 'T2']}
+            if len(selected_event_id) == 0:
+                sys.exit("[ERROR] Aucun événement T0/T1/T2 dans le fichier.")
+            epochs = mne.Epochs(raw_example, events, event_id=selected_event_id,
+                                tmin=tmin, tmax=tmax, baseline=None,
+                                preload=True, verbose=False, on_missing='ignore')
+            epochs.plot()
+        elif mode_main == "train":
+            # Mode multi-sujets : entraînement des 6 modèles
+            start_time = time.time()
+            subject_dirs = list_subject_dirs(eeg_dir)
+            print(f"[INFO] {len(subject_dirs)} sujets trouvés.")
+            train_dirs, tmp_dirs = train_test_split(subject_dirs, test_size=0.4, random_state=42)
+            test_dirs, holdout_dirs = train_test_split(tmp_dirs, test_size=0.5, random_state=42)
+            print(f"[INFO] Train: {train_dirs}")
+            print(f"[INFO] Test: {test_dirs}")
+            print(f"[INFO] Holdout: {holdout_dirs}")
+
+            agg_train = aggregate_subjects(train_dirs, chosen_channels, l_freq, h_freq, tmin, tmax)
+            agg_test = aggregate_subjects(test_dirs, chosen_channels, l_freq, h_freq, tmin, tmax)
+            agg_hold = aggregate_subjects(holdout_dirs, chosen_channels, l_freq, h_freq, tmin, tmax)
+
+            categories = ["exp0", "exp1", "exp2", "exp3", "exp4", "exp5"]
+            models = {}
+            for cat in categories:
+                if cat not in agg_train:
+                    print(f"[WARN] Pas de data train pour cat={cat}, skip.")
+                    continue
+                if cat not in agg_test:
+                    print(f"[WARN] Pas de data test pour cat={cat}, skip.")
+                    continue
+                X_train, y_train = agg_train[cat]
+                X_test, y_test = agg_test[cat]
+                print(f"\n[INFO] ============ Catégorie {cat} ============")
+                print(f"[INFO] X_train={X_train.shape}, y_train={y_train.shape}")
+                if len(np.unique(y_train)) < 2:
+                    print(f"[WARN] Catégorie {cat} n'a qu'une seule classe en train, skip.")
+                    continue
+                pipeline = build_pipeline_fbcsp()
+                try:
+                    cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='accuracy')
+                    print(f"[INFO] cross-value-scores={cv_scores}, mean={cv_scores.mean():.2f}")
+                except Exception as e:
+                    print(f"[ERROR] Erreur cross_val pour {cat}: {e}")
+                    continue
+                pipeline.fit(X_train, y_train)
+                test_acc = pipeline.score(X_test, y_test)
+                print(f"[INFO] Test accuracy={test_acc:.2f}")
+                models[cat] = pipeline
+                model_filename = f"model_{cat}.pkl"
+                with open(model_filename, "wb") as ff:
+                    pickle.dump(pipeline, ff)
+                print(f"[INFO] Modèle sauvegardé => {model_filename}")
+            holdout_accuracies = []
+            for cat in models:
+                if cat not in agg_hold:
+                    print(f"[INFO] cat={cat}, pas de data holdout => skip.")
+                    continue
+                X_hold, y_hold = agg_hold[cat]
+                print(f"\n[INFO] HOLDOUT prédictions cat={cat}, shape={X_hold.shape}")
+                pipeline = models[cat]
+                preds = pipeline.predict(X_hold)
+                hold_acc = np.mean(preds == y_hold)
+                print(f"[INFO] Holdout accuracy={hold_acc:.2f}")
+                holdout_accuracies.append(hold_acc)
+                for i in range(min(10, len(preds))):
+                    print(f"Epoch {i} => pred={preds[i]}, true={y_hold[i]}")
+            if holdout_accuracies:
+                moyenne = np.mean(holdout_accuracies)
+                print(f"\n[INFO] Moyenne holdout accuracy des modèles : {moyenne:.3f}")
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            minutes = int(elapsed_time // 60)
+            seconds = int(elapsed_time % 60)
+            print(f"\n[INFO] Temps total d'exécution : {minutes}:{seconds:02d} (min:ss)")
+        else:
+            sys.exit(0)
+        sys.exit(0)
+
+    # Mode individuel (au moins 3 arguments : sujet, run, mode)
     if len(sys.argv) >= 4:
         subject_id = sys.argv[1]
         run_id = sys.argv[2]
@@ -382,31 +443,10 @@ if __name__ == "__main__":
         full_path = os.path.join(eeg_dir, subject_folder, file_name)
         print(f"[INFO] Mode {mode} pour le sujet {subject_folder} et le run {run_id}")
 
-        # Vérification du type de run : baseline si run_id<=2, sinon tâche
         if int(run_id) <= 2:
-            try:
-                raw = mne.io.read_raw_edf(full_path, preload=True, verbose=False)
-            except Exception as e:
-                sys.exit(f"[ERROR] Impossible de charger le fichier {full_path}: {e}")
-            raw.pick(chosen_channels)
-            raw.set_eeg_reference('average', projection=False, verbose=False)
-            raw.filter(l_freq=l_freq, h_freq=h_freq, fir_design='firwin', verbose=False)
-            duration = 2.5
-            epochs = mne.make_fixed_length_epochs(raw, duration=duration, preload=True, verbose=False)
-            data = epochs.get_data()
-            m_obj = re.search(r'R(\d+)', file_name)
-            if m_obj:
-                run_number = int(m_obj.group(1))
-            else:
-                sys.exit("[ERROR] Impossible de déterminer le numéro de run")
-            if run_number == 1:
-                labels = np.ones(data.shape[0], dtype=int)  # yeux ouverts -> label 1
-            elif run_number == 2:
-                labels = 2 * np.ones(data.shape[0], dtype=int)  # yeux fermés -> label 2
-            else:
-                sys.exit("[ERROR] Run inconnu pour baseline")
+            sys.exit("[ERROR] Les runs baseline (1 et 2) sont ignorés dans ce mode.")
         else:
-            epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin=0.7, tmax=3.5)
+            epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin, tmax)
             if epochs is None:
                 sys.exit("[ERROR] Aucun epoch trouvé dans le fichier.")
             data = epochs.get_data()
@@ -417,133 +457,49 @@ if __name__ == "__main__":
             data = data[idx]
             labels = events[idx]
 
-        pipeline = build_pipeline_fbcsp()
-        model_filename = f"model_{subject_folder}R{run_id}.pkl"
-
+        from sklearn.model_selection import train_test_split
         if mode == "train":
-            # Évaluation par cross-validation
+            # Séparation : 80% pour l'entraînement et 20% en holdout (données jamais vues)
+            X_train, X_holdout, y_train, y_holdout = train_test_split(data, labels, test_size=0.2, random_state=42)
             try:
-                cv_scores = cross_val_score(pipeline, data, labels, cv=5, scoring='accuracy')
+                cv_scores = cross_val_score(build_pipeline_fbcsp(), X_train, y_train, cv=5, scoring='accuracy')
                 print(f"cross-value-scores: {cv_scores}, mean: {cv_scores.mean():.4f}")
             except Exception as e:
                 print(f"[ERROR] Erreur lors du cross_val_score: {e}")
-            pipeline.fit(data, labels)
-            train_acc = pipeline.score(data, labels)
-            print(f"Train accuracy: {train_acc:.4f}")
+            pipeline = build_pipeline_fbcsp()
+            pipeline.fit(X_train, y_train)
+            # Sauvegarde du modèle et des données holdout pour prédiction future
+            model_filename = f"model_{subject_folder}R{run_id}.pkl"
+            holdout_filename = f"model_{subject_folder}R{run_id}_holdout.pkl"
             with open(model_filename, "wb") as ff:
                 pickle.dump(pipeline, ff)
+            with open(holdout_filename, "wb") as ff:
+                pickle.dump({"X_holdout": X_holdout, "y_holdout": y_holdout}, ff)
             print(f"[INFO] Modèle sauvegardé => {model_filename}")
+            print(f"[INFO] Données holdout sauvegardées => {holdout_filename}")
         elif mode == "predict":
+            # Chargement du modèle et des données holdout
+            model_filename = f"model_{subject_folder}R{run_id}.pkl"
+            holdout_filename = f"model_{subject_folder}R{run_id}_holdout.pkl"
             try:
                 with open(model_filename, "rb") as ff:
                     pipeline = pickle.load(ff)
+                with open(holdout_filename, "rb") as ff:
+                    holdout_data = pickle.load(ff)
+                X_holdout = holdout_data["X_holdout"]
+                y_holdout = holdout_data["y_holdout"]
             except Exception as e:
-                sys.exit(f"[ERROR] Impossible de charger le modèle {model_filename}: {e}")
-            print("[INFO] Début de la prédiction en mode simulation temps réel:")
+                sys.exit(f"[ERROR] Impossible de charger le modèle ou les données holdout: {e}")
+            print("[INFO] Début de la prédiction en mode simulation temps réel sur les données holdout:")
             correct_count = 0
-            for i, (epoch, true_label) in enumerate(zip(data, labels)):
+            for i, (epoch, true_label) in enumerate(zip(X_holdout, y_holdout)):
                 print(f"just got epoch {i}")
                 pred = pipeline.predict(epoch[None, ...])[0]
                 print(f"Prediction: [{pred}] | True: {true_label}")
                 if pred == true_label:
                     correct_count += 1
-                current_acc = correct_count / (i + 1)
-                print(f"Cumulative Accuracy: {current_acc:.2%}")
-                time.sleep(0.5)  # délai simulé
+                time.sleep(0.5)
+            final_acc = correct_count / len(y_holdout) if len(y_holdout) > 0 else 0.0
+            print(f"Accuracy: {final_acc:.4f}")
         else:
             sys.exit("[ERROR] Mode inconnu. Utilisez 'train' ou 'predict'.")
-        sys.exit(0)
-
-    # Sinon, si aucun argument n'est fourni, on exécute le pipeline multi-sujets
-    print("[INFO] Exécution du pipeline multi-sujets...")
-    start_time = time.time()
-
-    # Test/affichage sur S001R01
-    test_subj = "S001"
-    test_run = "S001R01.edf"
-    path_example = os.path.join(eeg_dir, test_subj, test_run)
-    raw_example = mne.io.read_raw_edf(path_example, preload=True)
-    print("[INFO] Exemple brut:", raw_example.info)
-    data_ex, times_ex = raw_example[:]
-    fig_time, fig_fft = display_eeg_signals_and_spectra(
-        data=data_ex,
-        times=times_ex,
-        sfreq=raw_example.info['sfreq'],
-        title_suffix="-Brut",
-        freq_xlim=(0, 80),
-        fft_ylim=None,
-        grid_shape=(8, 8)
-    )
-    # plt.show()
-
-    print(f"[INFO] Nombre de canaux retenus: {len(chosen_channels)} => {chosen_channels}")
-    subject_dirs = list_subject_dirs(eeg_dir)
-    print(f"[INFO] {len(subject_dirs)} sujets trouvés.")
-
-    # Partitionnement Train / Test / Holdout
-    train_dirs, tmp_dirs = train_test_split(subject_dirs, test_size=0.4, random_state=42)
-    test_dirs, holdout_dirs = train_test_split(tmp_dirs, test_size=0.5, random_state=42)
-    print(f"[INFO] Train: {train_dirs}")
-    print(f"[INFO] Test: {test_dirs}")
-    print(f"[INFO] Holdout: {holdout_dirs}")
-
-    agg_train = aggregate_subjects(train_dirs, chosen_channels, l_freq, h_freq, tmin=0.7, tmax=3.5)
-    agg_test = aggregate_subjects(test_dirs, chosen_channels, l_freq, h_freq, tmin=0.7, tmax=3.5)
-    agg_hold = aggregate_subjects(holdout_dirs, chosen_channels, l_freq, h_freq, tmin=0.7, tmax=3.5)
-
-    # Liste des 7 expériences (incluant la baseline)
-    categories = ["exp_baseline", "exp0", "exp1", "exp2", "exp3", "exp4", "exp5"]
-    models = {}
-
-    for cat in categories:
-        if cat not in agg_train:
-            print(f"[WARN] Pas de data train pour cat={cat}, skip.")
-            continue
-        if cat not in agg_test:
-            print(f"[WARN] Pas de data test pour cat={cat}, skip.")
-            continue
-        X_train, y_train = agg_train[cat]
-        X_test, y_test = agg_test[cat]
-        print(f"\n[INFO] ============ Catégorie {cat} ============")
-        print(f"[INFO] X_train={X_train.shape}, y_train={y_train.shape}")
-        if len(np.unique(y_train)) < 2:
-            print(f"[WARN] Catégorie {cat} n'a qu'une seule classe en train, skip.")
-            continue
-        pipeline = build_pipeline_fbcsp()
-        try:
-            cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='accuracy')
-            print(f"[INFO] cross-value-scores={cv_scores}, mean={cv_scores.mean():.2f}")
-        except Exception as e:
-            print(f"[ERROR] Erreur cross_val pour {cat}: {e}")
-            continue
-        pipeline.fit(X_train, y_train)
-        test_acc = pipeline.score(X_test, y_test)
-        print(f"[INFO] Test accuracy={test_acc:.2f}")
-        models[cat] = pipeline
-        model_filename = f"model_{cat}.pkl"
-        with open(model_filename, "wb") as ff:
-            pickle.dump(pipeline, ff)
-        print(f"[INFO] Modèle sauvegardé => {model_filename}")
-
-    holdout_accuracies = []
-    for cat in models:
-        if cat not in agg_hold:
-            print(f"[INFO] cat={cat}, pas de data holdout => skip.")
-            continue
-        X_hold, y_hold = agg_hold[cat]
-        print(f"\n[INFO] HOLDOUT prédictions cat={cat}, shape={X_hold.shape}")
-        pipeline = models[cat]
-        preds = pipeline.predict(X_hold)
-        hold_acc = np.mean(preds == y_hold)
-        print(f"[INFO] Holdout accuracy={hold_acc:.2f}")
-        holdout_accuracies.append(hold_acc)
-        for i in range(min(10, len(preds))):
-            print(f"Epoch {i} => pred={preds[i]}, true={y_hold[i]}")
-    if holdout_accuracies:
-        moyenne = np.mean(holdout_accuracies)
-        print(f"\n[INFO] Moyenne holdout accuracy des modèles : {moyenne:.3f}")
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    minutes = int(elapsed_time // 60)
-    seconds = int(elapsed_time % 60)
-    print(f"\n[INFO] Temps total d'exécution : {minutes}:{seconds:02d} (min:ss)")
