@@ -331,7 +331,7 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         sys.exit(0)
 
-    # Mode avec un seul argument
+    # Mode avec un seul argument (ex: "analyse" ou "train" pour le multi-sujets)
     if len(sys.argv) == 2:
         mode_main = sys.argv[1].lower()
         if mode_main == "analyse":
@@ -366,6 +366,7 @@ if __name__ == "__main__":
             start_time = time.time()
             subject_dirs = list_subject_dirs(eeg_dir)
             print(f"[INFO] {len(subject_dirs)} sujets trouvés.")
+            from sklearn.model_selection import train_test_split
             train_dirs, tmp_dirs = train_test_split(subject_dirs, test_size=0.4, random_state=42)
             test_dirs, holdout_dirs = train_test_split(tmp_dirs, test_size=0.5, random_state=42)
             print(f"[INFO] Train: {train_dirs}")
@@ -459,8 +460,8 @@ if __name__ == "__main__":
 
         from sklearn.model_selection import train_test_split
         if mode == "train":
-            # Séparation : 80% pour l'entraînement et 20% en holdout (données jamais vues)
-            X_train, X_holdout, y_train, y_holdout = train_test_split(data, labels, test_size=0.2, random_state=42)
+            # Séparation : 60% pour l'entraînement et 40% en holdout
+            X_train, X_holdout, y_train, y_holdout = train_test_split(data, labels, test_size=0.4, random_state=42)
             try:
                 cv_scores = cross_val_score(build_pipeline_fbcsp(), X_train, y_train, cv=5, scoring='accuracy')
                 print(f"cross-value-scores: {cv_scores}, mean: {cv_scores.mean():.4f}")
@@ -468,7 +469,7 @@ if __name__ == "__main__":
                 print(f"[ERROR] Erreur lors du cross_val_score: {e}")
             pipeline = build_pipeline_fbcsp()
             pipeline.fit(X_train, y_train)
-            # Sauvegarde du modèle et des données holdout pour prédiction future
+            # Sauvegarder le modèle et le holdout pour la prédiction
             model_filename = f"model_{subject_folder}R{run_id}.pkl"
             holdout_filename = f"model_{subject_folder}R{run_id}_holdout.pkl"
             with open(model_filename, "wb") as ff:
@@ -478,7 +479,6 @@ if __name__ == "__main__":
             print(f"[INFO] Modèle sauvegardé => {model_filename}")
             print(f"[INFO] Données holdout sauvegardées => {holdout_filename}")
         elif mode == "predict":
-            # Chargement du modèle et des données holdout
             model_filename = f"model_{subject_folder}R{run_id}.pkl"
             holdout_filename = f"model_{subject_folder}R{run_id}_holdout.pkl"
             try:
@@ -493,9 +493,9 @@ if __name__ == "__main__":
             print("[INFO] Début de la prédiction en mode simulation temps réel sur les données holdout:")
             correct_count = 0
             for i, (epoch, true_label) in enumerate(zip(X_holdout, y_holdout)):
-                print(f"just got epoch {i}")
                 pred = pipeline.predict(epoch[None, ...])[0]
-                print(f"Prediction: [{pred}] | True: {true_label}")
+                equal_str = "True" if pred == true_label else "False"
+                print(f"epoch {i:02d}: [{pred}] [{true_label}] {equal_str}")
                 if pred == true_label:
                     correct_count += 1
                 time.sleep(0.5)
