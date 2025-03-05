@@ -95,7 +95,7 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
         return np.concatenate(X_features_list, axis=1)
 
 ############################################################################
-# 2) Fonctions d'affichage (EEG et FFT)
+# 2) Fonctions d'affichage (EEG, FFT, heatmap et électrogramme en grille)
 ############################################################################
 def plot_combined_spectrum(data, sfreq, title="Combined Frequency Spectrum"):
     """
@@ -132,9 +132,9 @@ def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
         fig_fft.subplots_adjust(**custom_margins)
     else:
         fig_time.subplots_adjust(left=0.07, right=0.986, top=0.967, bottom=0.06,
-                                 wspace=0.2, hspace=0.2)
+                                   wspace=0.2, hspace=0.2)
         fig_fft.subplots_adjust(left=0.07, right=0.986, top=0.967, bottom=0.06,
-                                wspace=0.2, hspace=0.2)
+                                  wspace=0.2, hspace=0.2)
     freqs = np.fft.rfftfreq(len(times), d=1 / sfreq)
     for i in range(n_channels):
         axs_time[i].plot(times, data[i])
@@ -156,6 +156,60 @@ def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
     plt.tight_layout()
     plt.show()
     return fig_time, fig_fft
+
+def plot_epochs_heatmap(epochs, title="Heatmap des epochs EEG"):
+    """
+    Affiche une heatmap de l'amplitude moyenne sur les epochs EEG.
+    """
+    data = epochs.get_data()  # forme : (n_epochs, n_channels, n_times)
+    avg_epoch = np.mean(data, axis=0)  # moyenne sur toutes les epochs, forme : (n_channels, n_times)
+    plt.figure(figsize=(10, 6))
+    plt.imshow(avg_epoch, aspect='auto', origin='lower', interpolation='nearest')
+    plt.colorbar(label="Amplitude")
+    plt.title(title)
+    plt.xlabel("Temps (échantillons)")
+    plt.ylabel("Canaux EEG")
+    plt.show()
+
+def plot_eeg_grid_with_background(epochs):
+    """
+    Affiche, sous forme d'une grille, les courbes EEG pour chaque canal (lignes) et pour chaque epoch (colonnes).
+    Le fond de chaque case est coloré selon l'événement associé (T0, T1 ou T2).
+    """
+    data = epochs.get_data()  # forme : (n_epochs, n_channels, n_times)
+    events = epochs.events[:, 2]  # On suppose T0=0, T1=1, T2=2
+    times = epochs.times
+    n_epochs, n_channels, n_times = data.shape
+
+    # Définition d'une couleur de fond pour chaque événement
+    cmap_dict = {0: 'lightgreen', 1: 'lightblue', 2: 'lightcoral'}
+    event_label = {0: 'T0', 1: 'T1', 2: 'T2'}
+
+    # Création d'une grille avec n_channels lignes et n_epochs colonnes
+    fig, axs = plt.subplots(n_channels, n_epochs, figsize=(2*n_epochs, 2*n_channels), sharex=True, sharey=True)
+
+    # Si n_epochs==1 ou n_channels==1, on s'assure d'avoir une liste de listes
+    if n_channels == 1:
+        axs = np.expand_dims(axs, axis=0)
+    if n_epochs == 1:
+        axs = np.expand_dims(axs, axis=1)
+
+    for ep in range(n_epochs):
+        # Couleur de fond selon l'événement de l'epoch
+        bg_color = cmap_dict.get(events[ep], 'white')
+        for ch in range(n_channels):
+            ax = axs[ch, ep]
+            ax.plot(times, data[ep, ch, :], color='black', lw=1)
+            ax.set_facecolor(bg_color)
+            if ch == 0:
+                ax.set_title(f"{event_label.get(events[ep], events[ep])}\n(n={ep})", fontsize=8)
+            # Réduire le nombre de ticks pour plus de clarté
+            ax.tick_params(axis='both', labelsize=6)
+    # Labels globaux
+    fig.text(0.5, 0.04, 'Temps (s)', ha='center', fontsize=10)
+    fig.text(0.04, 0.5, 'Amplitude', va='center', rotation='vertical', fontsize=10)
+    plt.tight_layout(rect=[0.05, 0.05, 1, 1])
+    plt.show()
 
 ############################################################################
 # 3) Gestion des runs et catégorisation en 6 expériences
@@ -322,46 +376,19 @@ if __name__ == "__main__":
 
     # Variables communes
     chosen_channels = ['C3..', 'Cz..', 'C4..', 'C1..', 'C2..', 'Fcz.', 'Fc3.', 'Fc4.',
-                       'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
+                         'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
     l_freq = 1.0
     h_freq = 40.0
     tmin, tmax = 0.7, 3.5
 
-    # Mode par défaut : sans argument, ne rien faire.
+    # Harmonisation des arguments :
+    # - Si 1 argument : mode multi-sujets (ex: "train" ou "predict")
+    # - Si 3 arguments : mode individuel avec <subject_id> <run_id> <mode>
     if len(sys.argv) == 1:
         sys.exit(0)
-
-    # Mode avec un seul argument (ex: "analyse" ou "train" pour le multi-sujets)
-    if len(sys.argv) == 2:
+    elif len(sys.argv) == 2:
         mode_main = sys.argv[1].lower()
-        if mode_main == "analyse":
-            # Choix d'un run significatif (par exemple S001R03.edf)
-            test_subj = "S001"
-            test_run = "S001R03.edf"
-            path_example = os.path.join(eeg_dir, test_subj, test_run)
-            try:
-                raw_example = mne.io.read_raw_edf(path_example, preload=True)
-            except Exception as e:
-                sys.exit(f"[ERROR] Impossible de charger {path_example}: {e}")
-            print("[INFO] Affichage du spectre de fréquence brut (moyenne sur 64 canaux)...")
-            data_raw, _ = raw_example[:]
-            plot_combined_spectrum(data_raw, raw_example.info['sfreq'],
-                                   title="Spectre brut (moyenne sur canaux)")
-            raw_example.filter(l_freq=1.0, h_freq=40.0, fir_design='firwin', verbose=False)
-            print("[INFO] Affichage du spectre de fréquence filtré (1-40Hz)...")
-            data_filt, _ = raw_example[:]
-            plot_combined_spectrum(data_filt, raw_example.info['sfreq'],
-                                   title="Spectre filtré (1-40Hz, moyenne sur canaux)")
-            print("[INFO] Affichage interactif des epochs...")
-            events, event_id = mne.events_from_annotations(raw_example, verbose=False)
-            selected_event_id = {k: v for k, v in event_id.items() if k in ['T0', 'T1', 'T2']}
-            if len(selected_event_id) == 0:
-                sys.exit("[ERROR] Aucun événement T0/T1/T2 dans le fichier.")
-            epochs = mne.Epochs(raw_example, events, event_id=selected_event_id,
-                                tmin=tmin, tmax=tmax, baseline=None,
-                                preload=True, verbose=False, on_missing='ignore')
-            epochs.plot()
-        elif mode_main == "train":
+        if mode_main == "train":
             # Mode multi-sujets : entraînement des 6 modèles
             start_time = time.time()
             subject_dirs = list_subject_dirs(eeg_dir)
@@ -430,46 +457,97 @@ if __name__ == "__main__":
             minutes = int(elapsed_time // 60)
             seconds = int(elapsed_time % 60)
             print(f"\n[INFO] Temps total d'exécution : {minutes}:{seconds:02d} (min:ss)")
+        elif mode_main == "predict":
+            # Mode multi-sujets pour predict (similaire à train)
+            # (La logique multi-sujets pour predict doit être définie selon vos besoins.)
+            sys.exit("[INFO] Mode multi-sujets predict non implémenté dans cette version.")
+        elif mode_main == "analyse":
+            # Mode analyse par défaut individuel : utilisation de S001 et S001R03
+            test_subj = "S001"
+            test_run = "S001R03.edf"
+            path_example = os.path.join(eeg_dir, test_subj, test_run)
+            try:
+                raw_example = mne.io.read_raw_edf(path_example, preload=True)
+            except Exception as e:
+                sys.exit(f"[ERROR] Impossible de charger {path_example}: {e}")
+            print("[INFO] Affichage du spectre de fréquence brut (moyenne sur 64 canaux)...")
+            data_raw, _ = raw_example[:]
+            plot_combined_spectrum(data_raw, raw_example.info['sfreq'],
+                                   title="Spectre brut (moyenne sur canaux)")
+            raw_example.filter(l_freq=1.0, h_freq=40.0, fir_design='firwin', verbose=False)
+            print("[INFO] Affichage du spectre de fréquence filtré (1-40Hz)...")
+            data_filt, _ = raw_example[:]
+            plot_combined_spectrum(data_filt, raw_example.info['sfreq'],
+                                   title="Spectre filtré (1-40Hz, moyenne sur canaux)")
+            print("[INFO] Affichage interactif des epochs...")
+            events, event_id = mne.events_from_annotations(raw_example, verbose=False)
+            selected_event_id = {k: v for k, v in event_id.items() if k in ['T0', 'T1', 'T2']}
+            if len(selected_event_id) == 0:
+                sys.exit("[ERROR] Aucun événement T0/T1/T2 dans le fichier.")
+            epochs = mne.Epochs(raw_example, events, event_id=selected_event_id,
+                                tmin=tmin, tmax=tmax, baseline=None,
+                                preload=True, verbose=False, on_missing='ignore')
+            epochs.plot()
+            print("[INFO] Affichage de la grille des courbes EEG avec fond coloré par événement...")
+            plot_eeg_grid_with_background(epochs)
         else:
-            sys.exit(0)
+            sys.exit("[ERROR] Mode inconnu pour le mode multi-sujets.")
         sys.exit(0)
-
-    # Mode individuel (au moins 3 arguments : sujet, run, mode)
-    if len(sys.argv) >= 4:
+    elif len(sys.argv) == 4:
+        # Mode individuel : les arguments sont <subject_id> <run_id> <mode>
         subject_id = sys.argv[1]
         run_id = sys.argv[2]
-        mode = sys.argv[3].lower()  # "train" ou "predict"
+        mode_indiv = sys.argv[3].lower()  # "analyse", "train" ou "predict"
         subject_folder = "S" + subject_id.zfill(3)
-        file_name = f"{subject_folder}R{run_id}.edf"
+        file_name = f"{subject_folder}R{run_id.zfill(2)}.edf"
         full_path = os.path.join(eeg_dir, subject_folder, file_name)
-        print(f"[INFO] Mode {mode} pour le sujet {subject_folder} et le run {run_id}")
-
+        print(f"[INFO] Mode {mode_indiv} pour le sujet {subject_folder} et le run {run_id}")
         if int(run_id) <= 2:
             sys.exit("[ERROR] Les runs baseline (1 et 2) sont ignorés dans ce mode.")
-        else:
+        if mode_indiv == "analyse":
+            try:
+                raw_example = mne.io.read_raw_edf(full_path, preload=True)
+            except Exception as e:
+                sys.exit(f"[ERROR] Impossible de charger {full_path}: {e}")
+            print("[INFO] Affichage du spectre de fréquence brut (moyenne sur 64 canaux)...")
+            data_raw, _ = raw_example[:]
+            plot_combined_spectrum(data_raw, raw_example.info['sfreq'],
+                                   title="Spectre brut (moyenne sur canaux)")
+            raw_example.filter(l_freq=1.0, h_freq=40.0, fir_design='firwin', verbose=False)
+            print("[INFO] Affichage du spectre de fréquence filtré (1-40Hz)...")
+            data_filt, _ = raw_example[:]
+            plot_combined_spectrum(data_filt, raw_example.info['sfreq'],
+                                   title="Spectre filtré (1-40Hz, moyenne sur canaux)")
+            print("[INFO] Traitement des epochs...")
+            epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin, tmax, do_reref=True)
+            if epochs is None:
+                sys.exit("[ERROR] Aucun epoch trouvé dans le fichier.")
+            # Affichage interactif des epochs (optionnel)
+            epochs.plot()
+            # Affichage de la grille des courbes EEG avec fond coloré selon l'événement
+            print("[INFO] Affichage de la grille EEG avec fond coloré (T0/T1/T2)...")
+            plot_eeg_grid_with_background(epochs)
+        elif mode_indiv == "train":
             epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin, tmax)
             if epochs is None:
                 sys.exit("[ERROR] Aucun epoch trouvé dans le fichier.")
             data = epochs.get_data()
             events = epochs.events[:, 2]
+            # On conserve uniquement les epochs avec T1 ou T2
             idx = (events == 1) | (events == 2)
             if not np.any(idx):
                 sys.exit("[ERROR] Aucune epoch avec T1/T2 dans le fichier.")
             data = data[idx]
             labels = events[idx]
-
-        from sklearn.model_selection import train_test_split
-        if mode == "train":
-            # Séparation : 60% pour l'entraînement et 40% en holdout
+            from sklearn.model_selection import train_test_split
             X_train, X_holdout, y_train, y_holdout = train_test_split(data, labels, test_size=0.4, random_state=42)
             try:
-                cv_scores = cross_val_score(build_pipeline_fbcsp(), X_train, y_train, cv=5, scoring='accuracy')
+                cv_scores = cross_val_score(build_pipeline_fbcsp(), X_train, y_train, cv=2, scoring='accuracy')
                 print(f"cross-value-scores: {cv_scores}, mean: {cv_scores.mean():.4f}")
             except Exception as e:
                 print(f"[ERROR] Erreur lors du cross_val_score: {e}")
             pipeline = build_pipeline_fbcsp()
             pipeline.fit(X_train, y_train)
-            # Sauvegarder le modèle et le holdout pour la prédiction
             model_filename = f"model_{subject_folder}R{run_id}.pkl"
             holdout_filename = f"model_{subject_folder}R{run_id}_holdout.pkl"
             with open(model_filename, "wb") as ff:
@@ -478,7 +556,7 @@ if __name__ == "__main__":
                 pickle.dump({"X_holdout": X_holdout, "y_holdout": y_holdout}, ff)
             print(f"[INFO] Modèle sauvegardé => {model_filename}")
             print(f"[INFO] Données holdout sauvegardées => {holdout_filename}")
-        elif mode == "predict":
+        elif mode_indiv == "predict":
             model_filename = f"model_{subject_folder}R{run_id}.pkl"
             holdout_filename = f"model_{subject_folder}R{run_id}_holdout.pkl"
             try:
@@ -495,11 +573,13 @@ if __name__ == "__main__":
             for i, (epoch, true_label) in enumerate(zip(X_holdout, y_holdout)):
                 pred = pipeline.predict(epoch[None, ...])[0]
                 equal_str = "True" if pred == true_label else "False"
-                print(f"epoch {i:02d}: [{pred}] [{true_label}] {equal_str}")
+                print(f"Epoch {i:02d}: [{pred}] [{true_label}] {equal_str}")
                 if pred == true_label:
                     correct_count += 1
                 time.sleep(0.5)
             final_acc = correct_count / len(y_holdout) if len(y_holdout) > 0 else 0.0
             print(f"Accuracy: {final_acc:.4f}")
         else:
-            sys.exit("[ERROR] Mode inconnu. Utilisez 'train' ou 'predict'.")
+            sys.exit("[ERROR] Mode inconnu. Utilisez 'analyse', 'train' ou 'predict'.")
+    else:
+        sys.exit("[ERROR] Nombre d'arguments incorrect. Utilisez soit 1 argument pour multi-sujets, soit 3 pour individuel.")
