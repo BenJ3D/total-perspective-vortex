@@ -13,13 +13,12 @@ import matplotlib.pyplot as plt
 import mne
 import numpy as np
 
-from mne.decoding import CSP
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.pipeline import Pipeline
 
-from my_csp import MyCSP
+from custom_mycsp import MyCSP
 
 ############################################################################
 # Réglages de parallélisation BLAS / OpenMP
@@ -155,7 +154,7 @@ def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
             axs_fft[i].set_ylim(fft_ylim)
     plt.tight_layout()
     plt.show()
-    return fig_time, fig_fft
+    return fig_time, axs_time
 
 def plot_epochs_heatmap(epochs, title="Heatmap des epochs EEG"):
     """
@@ -195,21 +194,38 @@ def plot_eeg_grid_with_background(epochs):
         axs = np.expand_dims(axs, axis=1)
 
     for ep in range(n_epochs):
-        # Couleur de fond selon l'événement de l'epoch
         bg_color = cmap_dict.get(events[ep], 'white')
         for ch in range(n_channels):
             ax = axs[ch, ep]
             ax.plot(times, data[ep, ch, :], color='black', lw=1)
             ax.set_facecolor(bg_color)
             if ch == 0:
-                ax.set_title(f"{event_label.get(events[ep], events[ep])}\n(n={ep})", fontsize=8)
-            # Réduire le nombre de ticks pour plus de clarté
+                ax.set_title(f"{event_label.get(events[ep], events[ep])}\n(ep={ep})", fontsize=8)
             ax.tick_params(axis='both', labelsize=6)
-    # Labels globaux
     fig.text(0.5, 0.04, 'Temps (s)', ha='center', fontsize=10)
     fig.text(0.04, 0.5, 'Amplitude', va='center', rotation='vertical', fontsize=10)
     plt.tight_layout(rect=[0.05, 0.05, 1, 1])
     plt.show()
+
+############################################################################
+# Fonction de segmentation par glissement pour augmenter le nombre d'échantillons
+############################################################################
+def segment_epochs_sliding(X, window_fraction=0.5, step_fraction=0.25):
+    """
+    Découpe chaque epoch en segments via un sliding window.
+    - X : array de forme (n_epochs, n_channels, n_times)
+    - window_fraction : fraction de la durée de l'epoch pour la fenêtre (ex: 0.5)
+    - step_fraction : fraction du nombre d'échantillons pour le pas (ex: 0.25)
+    Retourne un array de segments de forme (n_new_epochs, n_channels, window_length).
+    """
+    n_epochs, n_channels, n_times = X.shape
+    window_length = int(n_times * window_fraction)
+    step = int(n_times * step_fraction)
+    segments = []
+    for i in range(n_epochs):
+        for start in range(0, n_times - window_length + 1, step):
+            segments.append(X[i, :, start:start+window_length])
+    return np.array(segments)
 
 ############################################################################
 # 3) Gestion des runs et catégorisation en 6 expériences
@@ -393,7 +409,6 @@ if __name__ == "__main__":
             start_time = time.time()
             subject_dirs = list_subject_dirs(eeg_dir)
             print(f"[INFO] {len(subject_dirs)} sujets trouvés.")
-            from sklearn.model_selection import train_test_split
             train_dirs, tmp_dirs = train_test_split(subject_dirs, test_size=0.4, random_state=42)
             test_dirs, holdout_dirs = train_test_split(tmp_dirs, test_size=0.5, random_state=42)
             print(f"[INFO] Train: {train_dirs}")
@@ -458,8 +473,6 @@ if __name__ == "__main__":
             seconds = int(elapsed_time % 60)
             print(f"\n[INFO] Temps total d'exécution : {minutes}:{seconds:02d} (min:ss)")
         elif mode_main == "predict":
-            # Mode multi-sujets pour predict (similaire à train)
-            # (La logique multi-sujets pour predict doit être définie selon vos besoins.)
             sys.exit("[INFO] Mode multi-sujets predict non implémenté dans cette version.")
         elif mode_main == "analyse":
             # Mode analyse par défaut individuel : utilisation de S001 et S001R03
@@ -522,27 +535,36 @@ if __name__ == "__main__":
             epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin, tmax, do_reref=True)
             if epochs is None:
                 sys.exit("[ERROR] Aucun epoch trouvé dans le fichier.")
-            # Affichage interactif des epochs (optionnel)
             epochs.plot()
-            # Affichage de la grille des courbes EEG avec fond coloré selon l'événement
             print("[INFO] Affichage de la grille EEG avec fond coloré (T0/T1/T2)...")
             plot_eeg_grid_with_background(epochs)
         elif mode_indiv == "train":
+            # Pour le train individuel, on filtre pour ne conserver que T1 et T2
             epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin, tmax)
             if epochs is None:
                 sys.exit("[ERROR] Aucun epoch trouvé dans le fichier.")
-            data = epochs.get_data()
-            events = epochs.events[:, 2]
-            # On conserve uniquement les epochs avec T1 ou T2
-            idx = (events == 1) | (events == 2)
+            events_all = epochs.events[:, 2]
+            idx = (events_all == 1) | (events_all == 2)
             if not np.any(idx):
                 sys.exit("[ERROR] Aucune epoch avec T1/T2 dans le fichier.")
-            data = data[idx]
-            labels = events[idx]
+            X_orig = epochs.get_data()[idx]
+            y_orig = events_all[idx]
+            # Découpage en segments via sliding window (plus de marge)
+            X_new = segment_epochs_sliding(X_orig, window_fraction=0.5, step_fraction=0.25)
+            # Chaque segment hérite du label de l'epoch d'origine
+            y_new = []
+            n_epochs, _, _ = X_orig.shape
+            window_length = int(X_orig.shape[2] * 0.5)
+            step = int(X_orig.shape[2] * 0.25)
+            n_segments_per_epoch = ((X_orig.shape[2] - window_length) // step) + 1
+            for i in range(len(y_orig)):
+                y_new.extend([y_orig[i]] * n_segments_per_epoch)
+            X_new = np.array(X_new)
+            y_new = np.array(y_new)
             from sklearn.model_selection import train_test_split
-            X_train, X_holdout, y_train, y_holdout = train_test_split(data, labels, test_size=0.4, random_state=42)
+            X_train, X_holdout, y_train, y_holdout = train_test_split(X_new, y_new, test_size=0.40, random_state=42)
             try:
-                cv_scores = cross_val_score(build_pipeline_fbcsp(), X_train, y_train, cv=2, scoring='accuracy')
+                cv_scores = cross_val_score(build_pipeline_fbcsp(), X_train, y_train, cv=10, scoring='accuracy')
                 print(f"cross-value-scores: {cv_scores}, mean: {cv_scores.mean():.4f}")
             except Exception as e:
                 print(f"[ERROR] Erreur lors du cross_val_score: {e}")
@@ -557,17 +579,39 @@ if __name__ == "__main__":
             print(f"[INFO] Modèle sauvegardé => {model_filename}")
             print(f"[INFO] Données holdout sauvegardées => {holdout_filename}")
         elif mode_indiv == "predict":
+            # Pour le predict individuel, on filtre également pour ne garder que T1 et T2
+            epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin, tmax)
+            if epochs is None:
+                sys.exit("[ERROR] Aucun epoch trouvé dans le fichier.")
+            events_all = epochs.events[:, 2]
+            idx = (events_all == 1) | (events_all == 2)
+            if not np.any(idx):
+                sys.exit("[ERROR] Aucune epoch avec T1/T2 dans le fichier.")
+            X_orig = epochs.get_data()[idx]
+            y_orig = events_all[idx]
+            X_new = segment_epochs_sliding(X_orig, window_fraction=0.5, step_fraction=0.25)
+            y_new = []
+            n_epochs, _, _ = X_orig.shape
+            window_length = int(X_orig.shape[2] * 0.5)
+            step = int(X_orig.shape[2] * 0.25)
+            n_segments_per_epoch = ((X_orig.shape[2] - window_length) // step) + 1
+            for i in range(len(y_orig)):
+                y_new.extend([y_orig[i]] * n_segments_per_epoch)
+            X_new = np.array(X_new)
+            y_new = np.array(y_new)
+            # Pour le predict, on retient exactement 8 segments (si plus, on ne prend que les 8 premières)
+            if X_new.shape[0] >= 8:
+                X_holdout = X_new[:8]
+                y_holdout = y_new[:8]
+            else:
+                X_holdout = X_new
+                y_holdout = y_new
             model_filename = f"model_{subject_folder}R{run_id}.pkl"
-            holdout_filename = f"model_{subject_folder}R{run_id}_holdout.pkl"
             try:
                 with open(model_filename, "rb") as ff:
                     pipeline = pickle.load(ff)
-                with open(holdout_filename, "rb") as ff:
-                    holdout_data = pickle.load(ff)
-                X_holdout = holdout_data["X_holdout"]
-                y_holdout = holdout_data["y_holdout"]
             except Exception as e:
-                sys.exit(f"[ERROR] Impossible de charger le modèle ou les données holdout: {e}")
+                sys.exit(f"[ERROR] Impossible de charger le modèle: {e}")
             print("[INFO] Début de la prédiction en mode simulation temps réel sur les données holdout:")
             correct_count = 0
             for i, (epoch, true_label) in enumerate(zip(X_holdout, y_holdout)):
