@@ -107,8 +107,18 @@ def plot_psd_all_channels_0_80(raw, n_fft=2048, title="PSD all channels (0-80 Hz
     sfreq = raw.info['sfreq']
 
     # PSD canal par canal
-    psds, freqs = psd_array_welch(data, sfreq=sfreq, fmin=0, fmax=80,
-                                  n_fft=n_fft, verbose=False)
+    psds, freqs = psd_array_welch(
+        data,  # data shape (n_channels, n_times)
+        sfreq=sfreq,
+        fmin=0,
+        fmax=80,
+        window='hann',
+        n_fft=2048,  # ou n_fft=1024
+        n_per_seg=512,  # réduit la résolution
+        n_overlap=256,  # pour un overlap de 50%
+        average='mean',
+        verbose=False
+    )
     psds_db = 10 * np.log10(psds)  # passage en dB
 
     plt.figure(figsize=(10, 6))
@@ -539,7 +549,7 @@ if __name__ == "__main__":
                                        title="(3) Filtré 8–32 Hz, PSD 0–80 Hz")
 
 
-            plot_mean_psd_with_std_0_80(raw_8_32, n_fft=2048, smooth_sigma=1,
+            plot_mean_psd_with_std_0_80(raw_8_32, n_fft=2048, smooth_sigma=8,
                                         title="(2) Non filtré, PSD 0–80 Hz (moy + std)")
 
 
