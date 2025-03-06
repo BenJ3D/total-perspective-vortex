@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os
 import re
 import sys
@@ -405,7 +402,7 @@ def aggregate_subjects(subject_dirs, channels, l_freq, h_freq, tmin, tmax):
 def build_pipeline_fbcsp():
     filter_bands = [(8, 11), (11, 13), (13, 20), (20, 26), (26, 32)]
     fbcsp = FilterBankCSP(filter_bands=filter_bands,
-                          n_components=11,
+                          n_components=n_components,
                           csp_reg='ledoit_wolf',
                           csp_log=True,
                           sfreq=160.0,
@@ -440,12 +437,20 @@ if __name__ == "__main__":
     eeg_dir = os.getenv("EEG_DIR", "")
     print(f"[INFO] EEG_DIR={eeg_dir}")
 
-    # Variables communes
+    # # Variables communes
+    # (version performance // 0.713 // ~8min30)
     chosen_channels = ['C3..', 'Cz..', 'C4..', 'C1..', 'C2..', 'Fcz.', 'Fc3.', 'Fc4.',
                        'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
+    n_components = 11
+
+    # (version rapide // 0.673 // 3min18)
+    # chosen_channels = ['C3..', 'Cz..', 'C4..', 'Fcz.']
+    # n_components = 4
+
+
     l_freq = 1.0
     h_freq = 40.0
-    tmin, tmax = 0.7, 3.5
+    tmin, tmax = 0.7, 3.9 #best for the moment 0.7, 3.9 -> 0.721
 
     # Harmonisation des arguments :
     # - Si 1 argument : mode multi-sujets (ex: "train" ou "predict")
@@ -637,10 +642,9 @@ if __name__ == "__main__":
                 y_new.extend([y_orig[i]] * n_segments_per_epoch)
             X_new = np.array(X_new)
             y_new = np.array(y_new)
-            from sklearn.model_selection import train_test_split
             X_train, X_holdout, y_train, y_holdout = train_test_split(X_new, y_new, test_size=0.40, random_state=43)
             try:
-                cv_scores = cross_val_score(build_pipeline_fbcsp(), X_train, y_train, cv=10, scoring='accuracy')
+                cv_scores = cross_val_score(build_pipeline_fbcsp(), X_train, y_train, cv=5, scoring='accuracy')
                 print(f"cross-value-scores: {cv_scores}, mean: {cv_scores.mean():.4f}")
             except Exception as e:
                 print(f"[ERROR] Erreur lors du cross_val_score: {e}")
