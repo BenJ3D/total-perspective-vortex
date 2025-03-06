@@ -541,6 +541,16 @@ if __name__ == "__main__":
 
             print("[INFO] Affichage des spectres PSD individuels pour les 64 canaux EEG...")
             raw_example.filter(l_freq=1.0, h_freq=40.0, fir_design='firwin', verbose=False)
+
+            raw_example.plot(
+                n_channels=64,
+                duration=10.0,
+                scalings='auto',
+                title='Données brutes (64 canaux)',
+                show=True,
+                block=True
+            )
+
             plot_psd_all_channels_0_80(raw_example, n_fft=2048, title="PSD (0-80 Hz) - tous canaux")
 
             raw_8_32 = raw_example.copy().filter(l_freq=8, h_freq=32, fir_design='firwin', verbose=False)
@@ -578,9 +588,25 @@ if __name__ == "__main__":
             except Exception as e:
                 sys.exit(f"[ERROR] Impossible de charger {full_path}: {e}")
 
-            print("[INFO] Affichage du spectre de fréquence (PSD) en dB (moyenne sur 64 canaux)")
-            plot_combined_psd(raw_example, fmin=0, fmax=80, n_fft=2048,
-                              title=f"Spectre PSD (sujet {subject_folder}, run {run_id})")
+            raw_example.plot(
+                n_channels=64,
+                duration=10.0,
+                scalings='auto',
+                title='Données brutes (64 canaux)',
+                show=True,
+                block=True
+            )
+
+            plot_psd_all_channels_0_80(raw_example, n_fft=2048, title="PSD (0-80 Hz) - tous canaux")
+
+            raw_8_32 = raw_example.copy().filter(l_freq=8, h_freq=32, fir_design='firwin', verbose=False)
+
+            plot_psd_all_channels_0_80(raw_8_32, n_fft=2048,
+                                       title="(3) Filtré 8–32 Hz, PSD 0–80 Hz")
+
+
+            plot_mean_psd_with_std_0_80(raw_8_32, n_fft=2048, smooth_sigma=8,
+                                        title="(2) Non filtré, PSD 0–80 Hz (moy + std)")
 
         elif mode_indiv == "train":
             # Entraînement individuel
