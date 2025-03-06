@@ -94,138 +94,158 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
         return np.concatenate(X_features_list, axis=1)
 
 ############################################################################
-# 2) Fonctions d'affichage (EEG, FFT, heatmap et électrogramme en grille)
+# Nouvelle fonction pour l'affichage du PSD
 ############################################################################
-def plot_combined_spectrum(data, sfreq, title="Combined Frequency Spectrum"):
+from mne.time_frequency import psd_array_welch
+
+def plot_psd_all_channels_0_80(raw, n_fft=2048, title="PSD all channels (0-80 Hz)"):
     """
-    Calcule et affiche la transformée de Fourier moyenne sur tous les canaux.
+    Affiche le spectre de densité de puissance (PSD) de 0 à 80 Hz
+    pour chaque canal EEG.
     """
-    fft_vals = np.abs(np.fft.rfft(data, axis=1))
-    avg_spectrum = np.mean(fft_vals, axis=0)
-    freqs = np.fft.rfftfreq(data.shape[1], d=1/sfreq)
-    plt.figure()
-    plt.plot(freqs, avg_spectrum)
+    data = raw.get_data()  # (n_channels, n_times)
+    sfreq = raw.info['sfreq']
+
+    # PSD canal par canal
+    psds, freqs = psd_array_welch(data, sfreq=sfreq, fmin=0, fmax=80,
+                                  n_fft=n_fft, verbose=False)
+    psds_db = 10 * np.log10(psds)  # passage en dB
+
+    plt.figure(figsize=(10, 6))
+    for ch_idx in range(psds_db.shape[0]):
+        plt.plot(freqs, psds_db[ch_idx], linewidth=0.5, alpha=0.7)
+
     plt.title(title)
     plt.xlabel("Fréquence (Hz)")
-    plt.ylabel("Amplitude moyenne")
-    plt.xlim(0, 80)
-    plt.show()
-
-def display_eeg_signals_and_spectra(data, times, sfreq, title_suffix="",
-                                    time_ylim=None, freq_xlim=(0, 100),
-                                    fft_ylim=None, grid_shape=None,
-                                    custom_margins=None):
-    import math
-    n_channels = data.shape[0]
-    if grid_shape is None:
-        n_rows = int(math.ceil(math.sqrt(n_channels)))
-        n_cols = int(math.ceil(n_channels / n_rows))
-    else:
-        n_rows, n_cols = grid_shape
-    fig_time, axs_time = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
-    axs_time = np.array(axs_time).reshape(-1) if n_channels > 1 else [axs_time]
-    fig_fft, axs_fft = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
-    axs_fft = np.array(axs_fft).reshape(-1) if n_channels > 1 else [axs_fft]
-    if custom_margins is not None:
-        fig_time.subplots_adjust(**custom_margins)
-        fig_fft.subplots_adjust(**custom_margins)
-    else:
-        fig_time.subplots_adjust(left=0.07, right=0.986, top=0.967, bottom=0.06,
-                                   wspace=0.2, hspace=0.2)
-        fig_fft.subplots_adjust(left=0.07, right=0.986, top=0.967, bottom=0.06,
-                                  wspace=0.2, hspace=0.2)
-    freqs = np.fft.rfftfreq(len(times), d=1 / sfreq)
-    for i in range(n_channels):
-        axs_time[i].plot(times, data[i])
-        axs_time[i].set_title(f"Canal {i} {title_suffix}")
-        axs_time[i].set_xlabel("Temps (s)")
-        axs_time[i].set_ylabel("Amplitude")
-        axs_time[i].grid(True)
-        if time_ylim is not None:
-            axs_time[i].set_ylim(time_ylim)
-        fft_spectrum = np.abs(np.fft.rfft(data[i]))
-        axs_fft[i].plot(freqs, fft_spectrum)
-        axs_fft[i].set_title(f"FFT Canal {i} {title_suffix}")
-        axs_fft[i].set_xlabel("Fréquence (Hz)")
-        axs_fft[i].set_ylabel("Amplitude")
-        axs_fft[i].grid(True)
-        axs_fft[i].set_xlim(freq_xlim)
-        if fft_ylim is not None:
-            axs_fft[i].set_ylim(fft_ylim)
+    plt.ylabel(r"PSD (dB)")
+    plt.xlim([0, 80])
+    plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
     plt.show()
-    return fig_time, axs_time
 
-def plot_epochs_heatmap(epochs, title="Heatmap des epochs EEG"):
+
+from scipy.ndimage import gaussian_filter1d
+
+def plot_psd_all_channels_0_80(raw, n_fft=2048, title="PSD (0–80 Hz)"):
     """
-    Affiche une heatmap de l'amplitude moyenne sur les epochs EEG.
+    Calcule et affiche la PSD de 0 à 80 Hz pour chaque canal EEG.
     """
-    data = epochs.get_data()  # forme : (n_epochs, n_channels, n_times)
-    avg_epoch = np.mean(data, axis=0)  # moyenne sur toutes les epochs, forme : (n_channels, n_times)
+    data = raw.get_data()            # shape (n_channels, n_times)
+    sfreq = raw.info['sfreq']
+
+    # Calcul de la PSD entre 0 et 80 Hz
+    psds, freqs = psd_array_welch(data, sfreq=sfreq, fmin=0, fmax=80,
+                                  n_fft=n_fft, verbose=False)
+    psds_db = 10 * np.log10(psds)    # passage en dB
+
     plt.figure(figsize=(10, 6))
-    plt.imshow(avg_epoch, aspect='auto', origin='lower', interpolation='nearest')
-    plt.colorbar(label="Amplitude")
+    for ch_idx in range(psds_db.shape[0]):
+        plt.plot(freqs, psds_db[ch_idx], linewidth=0.5, alpha=0.7)
+
     plt.title(title)
-    plt.xlabel("Temps (échantillons)")
-    plt.ylabel("Canaux EEG")
+    plt.xlabel("Fréquence (Hz)")
+    plt.ylabel("PSD (dB)")
+    plt.xlim([0, 80])               # Echelle 0–80 Hz
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
     plt.show()
 
-def plot_eeg_grid_with_background(epochs):
+
+
+def plot_mean_psd_with_std_0_80(raw, n_fft=2048, smooth_sigma=1, title="PSD moyen (0–80 Hz)"):
     """
-    Affiche, sous forme d'une grille, les courbes EEG pour chaque canal (lignes) et pour chaque epoch (colonnes).
-    Le fond de chaque case est coloré selon l'événement associé (T0, T1 ou T2).
+    Calcule la PSD (0–80 Hz) pour chaque canal, puis affiche la courbe moyenne
+    (lissée) et la zone ±1 écart-type.
     """
-    data = epochs.get_data()  # forme : (n_epochs, n_channels, n_times)
-    events = epochs.events[:, 2]  # On suppose T0=0, T1=1, T2=2
-    times = epochs.times
-    n_epochs, n_channels, n_times = data.shape
+    data = raw.get_data()
+    sfreq = raw.info['sfreq']
 
-    # Définition d'une couleur de fond pour chaque événement
-    cmap_dict = {0: 'lightgreen', 1: 'lightblue', 2: 'lightcoral'}
-    event_label = {0: 'T0', 1: 'T1', 2: 'T2'}
+    psds, freqs = psd_array_welch(data, sfreq=sfreq, fmin=0, fmax=80,
+                                  n_fft=n_fft, verbose=False)
+    psds_db = 10 * np.log10(psds)  # (n_channels, n_freqs)
 
-    # Création d'une grille avec n_channels lignes et n_epochs colonnes
-    fig, axs = plt.subplots(n_channels, n_epochs, figsize=(2*n_epochs, 2*n_channels), sharex=True, sharey=True)
+    # Moyenne et std sur l’axe 0 (canaux)
+    mean_psd = np.mean(psds_db, axis=0)
+    std_psd  = np.std(psds_db, axis=0)
 
-    # Si n_epochs==1 ou n_channels==1, on s'assure d'avoir une liste de listes
-    if n_channels == 1:
-        axs = np.expand_dims(axs, axis=0)
-    if n_epochs == 1:
-        axs = np.expand_dims(axs, axis=1)
+    # Lissage (optionnel) des courbes
+    if smooth_sigma is not None and smooth_sigma > 0:
+        mean_psd = gaussian_filter1d(mean_psd, sigma=smooth_sigma)
+        std_psd  = gaussian_filter1d(std_psd,  sigma=smooth_sigma)
 
-    for ep in range(n_epochs):
-        bg_color = cmap_dict.get(events[ep], 'white')
-        for ch in range(n_channels):
-            ax = axs[ch, ep]
-            ax.plot(times, data[ep, ch, :], color='black', lw=1)
-            ax.set_facecolor(bg_color)
-            if ch == 0:
-                ax.set_title(f"{event_label.get(events[ep], events[ep])}\n(ep={ep})", fontsize=8)
-            ax.tick_params(axis='both', labelsize=6)
-    fig.text(0.5, 0.04, 'Temps (s)', ha='center', fontsize=10)
-    fig.text(0.04, 0.5, 'Amplitude', va='center', rotation='vertical', fontsize=10)
-    plt.tight_layout(rect=[0.05, 0.05, 1, 1])
+    plt.figure(figsize=(8, 5))
+    # Courbe moyenne
+    plt.plot(freqs, mean_psd, color='black', label='Moyenne')
+
+    # Zone ±1 écart-type
+    plt.fill_between(freqs,
+                     mean_psd - std_psd,
+                     mean_psd + std_psd,
+                     color='gray', alpha=0.4, label='±1 écart-type')
+
+    plt.title(title)
+    plt.xlabel("Fréquence (Hz)")
+    plt.ylabel("PSD (dB)")
+    plt.xlim([0, 80])  # Même échelle de 0 à 80 Hz
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.legend(loc='best')
+    plt.tight_layout()
     plt.show()
 
-############################################################################
-# Fonction de segmentation par glissement pour augmenter le nombre d'échantillons
-############################################################################
-def segment_epochs_sliding(X, window_fraction=0.5, step_fraction=0.25):
+
+
+def plot_psd_all_channels(raw, fmin=0, fmax=80, n_fft=2048, title="EEG (64 canaux)"):
     """
-    Découpe chaque epoch en segments via un sliding window.
-    - X : array de forme (n_epochs, n_channels, n_times)
-    - window_fraction : fraction de la durée de l'epoch pour la fenêtre (ex: 0.5)
-    - step_fraction : fraction du nombre d'échantillons pour le pas (ex: 0.25)
-    Retourne un array de segments de forme (n_new_epochs, n_channels, window_length).
+    Affiche le spectre de densité de puissance (PSD) pour chaque canal EEG,
+    en utilisant la méthode 'welch' via raw.compute_psd().
     """
-    n_epochs, n_channels, n_times = X.shape
-    window_length = int(n_times * window_fraction)
-    step = int(n_times * step_fraction)
-    segments = []
-    for i in range(n_epochs):
-        for start in range(0, n_times - window_length + 1, step):
-            segments.append(X[i, :, start:start+window_length])
-    return np.array(segments)
+    # On calcule le PSD par canal
+    psd = raw.compute_psd(fmin=fmin, fmax=fmax, method='welch', n_fft=n_fft)
+
+    # psd.get_data() renvoie un array de shape (n_channels, n_freqs)
+    psds = psd.get_data()
+    freqs = psd.freqs
+
+    # Passage en dB
+    psds_db = 10 * np.log10(psds)
+
+    plt.figure(figsize=(10, 8))
+    for channel_idx in range(psds_db.shape[0]):
+        plt.plot(freqs, psds_db[channel_idx], linewidth=0.5, alpha=0.7)
+
+    plt.xlabel('Fréquence (Hz)')
+    plt.ylabel(r'$\mu V^2 / Hz$ (dB)')
+    plt.title(title)
+    plt.xlim([fmin, fmax])
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_combined_psd(raw, fmin=0, fmax=80, n_fft=2048, title="EEG (64 canaux)"):
+    """
+    Calcule et affiche la densité spectrale de puissance (PSD) en dB,
+    moyennée sur tous les canaux EEG.
+    Utilise psd_array_welch pour compatibilité avec d'anciennes versions de MNE.
+    """
+    from mne.time_frequency import psd_array_welch
+    data = raw.get_data()  # shape: (n_channels, n_times)
+    sfreq = raw.info['sfreq']
+
+    psds, freqs = psd_array_welch(data, sfreq=sfreq, fmin=fmin, fmax=fmax,
+                                  n_fft=n_fft, verbose=False)
+    # Moyenne sur les canaux, passage en dB
+    psds_mean = 10 * np.log10(psds.mean(axis=0))
+
+    plt.figure()
+    plt.plot(freqs, psds_mean, color='black')
+    plt.xlabel('Fréquence (Hz)')
+    plt.ylabel('PSD (dB)')
+    plt.title(title)
+    plt.xlim([fmin, fmax])
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.show()
 
 ############################################################################
 # 3) Gestion des runs et catégorisation en 6 expériences
@@ -384,7 +404,27 @@ def build_pipeline_fbcsp():
     return Pipeline([('FBCSP', fbcsp), ('LDA', clf)])
 
 ############################################################################
-# 8) Main
+# 8) Fonction de segmentation par glissement
+############################################################################
+def segment_epochs_sliding(X, window_fraction=0.5, step_fraction=0.25):
+    """
+    Découpe chaque epoch en segments via un sliding window.
+    - X : array de forme (n_epochs, n_channels, n_times)
+    - window_fraction : fraction de la durée de l'epoch pour la fenêtre (ex: 0.5)
+    - step_fraction : fraction du nombre d'échantillons pour le pas (ex: 0.25)
+    Retourne un array de segments de forme (n_new_epochs, n_channels, window_length).
+    """
+    n_epochs, n_channels, n_times = X.shape
+    window_length = int(n_times * window_fraction)
+    step = int(n_times * step_fraction)
+    segments = []
+    for i in range(n_epochs):
+        for start in range(0, n_times - window_length + 1, step):
+            segments.append(X[i, :, start:start+window_length])
+    return np.array(segments)
+
+############################################################################
+# 9) Main
 ############################################################################
 if __name__ == "__main__":
     eeg_dir = os.getenv("EEG_DIR", "")
@@ -392,7 +432,7 @@ if __name__ == "__main__":
 
     # Variables communes
     chosen_channels = ['C3..', 'Cz..', 'C4..', 'C1..', 'C2..', 'Fcz.', 'Fc3.', 'Fc4.',
-                         'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
+                       'Cpz.', 'Cp3.', 'Cp4.', 'Cp1.', 'Cp2.', 'Pz..', 'Fz..']
     l_freq = 1.0
     h_freq = 40.0
     tmin, tmax = 0.7, 3.5
@@ -402,6 +442,7 @@ if __name__ == "__main__":
     # - Si 3 arguments : mode individuel avec <subject_id> <run_id> <mode>
     if len(sys.argv) == 1:
         sys.exit(0)
+
     elif len(sys.argv) == 2:
         mode_main = sys.argv[1].lower()
         if mode_main == "train":
@@ -409,6 +450,8 @@ if __name__ == "__main__":
             start_time = time.time()
             subject_dirs = list_subject_dirs(eeg_dir)
             print(f"[INFO] {len(subject_dirs)} sujets trouvés.")
+
+            # Exemple de split train/test/holdout
             train_dirs, tmp_dirs = train_test_split(subject_dirs, test_size=0.4, random_state=42)
             test_dirs, holdout_dirs = train_test_split(tmp_dirs, test_size=0.5, random_state=42)
             print(f"[INFO] Train: {train_dirs}")
@@ -472,8 +515,10 @@ if __name__ == "__main__":
             minutes = int(elapsed_time // 60)
             seconds = int(elapsed_time % 60)
             print(f"\n[INFO] Temps total d'exécution : {minutes}:{seconds:02d} (min:ss)")
+
         elif mode_main == "predict":
             sys.exit("[INFO] Mode multi-sujets predict non implémenté dans cette version.")
+
         elif mode_main == "analyse":
             # Mode analyse par défaut individuel : utilisation de S001 et S001R03
             test_subj = "S001"
@@ -483,29 +528,26 @@ if __name__ == "__main__":
                 raw_example = mne.io.read_raw_edf(path_example, preload=True)
             except Exception as e:
                 sys.exit(f"[ERROR] Impossible de charger {path_example}: {e}")
-            print("[INFO] Affichage du spectre de fréquence brut (moyenne sur 64 canaux)...")
-            data_raw, _ = raw_example[:]
-            plot_combined_spectrum(data_raw, raw_example.info['sfreq'],
-                                   title="Spectre brut (moyenne sur canaux)")
+
+            print("[INFO] Affichage des spectres PSD individuels pour les 64 canaux EEG...")
             raw_example.filter(l_freq=1.0, h_freq=40.0, fir_design='firwin', verbose=False)
-            print("[INFO] Affichage du spectre de fréquence filtré (1-40Hz)...")
-            data_filt, _ = raw_example[:]
-            plot_combined_spectrum(data_filt, raw_example.info['sfreq'],
-                                   title="Spectre filtré (1-40Hz, moyenne sur canaux)")
-            print("[INFO] Affichage interactif des epochs...")
-            events, event_id = mne.events_from_annotations(raw_example, verbose=False)
-            selected_event_id = {k: v for k, v in event_id.items() if k in ['T0', 'T1', 'T2']}
-            if len(selected_event_id) == 0:
-                sys.exit("[ERROR] Aucun événement T0/T1/T2 dans le fichier.")
-            epochs = mne.Epochs(raw_example, events, event_id=selected_event_id,
-                                tmin=tmin, tmax=tmax, baseline=None,
-                                preload=True, verbose=False, on_missing='ignore')
-            epochs.plot()
-            print("[INFO] Affichage de la grille des courbes EEG avec fond coloré par événement...")
-            plot_eeg_grid_with_background(epochs)
+            plot_psd_all_channels_0_80(raw_example, n_fft=2048, title="PSD (0-80 Hz) - tous canaux")
+
+            raw_8_32 = raw_example.copy().filter(l_freq=8, h_freq=32, fir_design='firwin', verbose=False)
+
+            plot_psd_all_channels_0_80(raw_8_32, n_fft=2048,
+                                       title="(3) Filtré 8–32 Hz, PSD 0–80 Hz")
+
+
+            plot_mean_psd_with_std_0_80(raw_8_32, n_fft=2048, smooth_sigma=1,
+                                        title="(2) Non filtré, PSD 0–80 Hz (moy + std)")
+
+
+
         else:
             sys.exit("[ERROR] Mode inconnu pour le mode multi-sujets.")
         sys.exit(0)
+
     elif len(sys.argv) == 4:
         # Mode individuel : les arguments sont <subject_id> <run_id> <mode>
         subject_id = sys.argv[1]
@@ -515,31 +557,23 @@ if __name__ == "__main__":
         file_name = f"{subject_folder}R{run_id.zfill(2)}.edf"
         full_path = os.path.join(eeg_dir, subject_folder, file_name)
         print(f"[INFO] Mode {mode_indiv} pour le sujet {subject_folder} et le run {run_id}")
+
         if int(run_id) <= 2:
             sys.exit("[ERROR] Les runs baseline (1 et 2) sont ignorés dans ce mode.")
+
         if mode_indiv == "analyse":
+            # Analyse simple du PSD sur le run donné
             try:
                 raw_example = mne.io.read_raw_edf(full_path, preload=True)
             except Exception as e:
                 sys.exit(f"[ERROR] Impossible de charger {full_path}: {e}")
-            print("[INFO] Affichage du spectre de fréquence brut (moyenne sur 64 canaux)...")
-            data_raw, _ = raw_example[:]
-            plot_combined_spectrum(data_raw, raw_example.info['sfreq'],
-                                   title="Spectre brut (moyenne sur canaux)")
-            raw_example.filter(l_freq=1.0, h_freq=40.0, fir_design='firwin', verbose=False)
-            print("[INFO] Affichage du spectre de fréquence filtré (1-40Hz)...")
-            data_filt, _ = raw_example[:]
-            plot_combined_spectrum(data_filt, raw_example.info['sfreq'],
-                                   title="Spectre filtré (1-40Hz, moyenne sur canaux)")
-            print("[INFO] Traitement des epochs...")
-            epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin, tmax, do_reref=True)
-            if epochs is None:
-                sys.exit("[ERROR] Aucun epoch trouvé dans le fichier.")
-            epochs.plot()
-            print("[INFO] Affichage de la grille EEG avec fond coloré (T0/T1/T2)...")
-            plot_eeg_grid_with_background(epochs)
+
+            print("[INFO] Affichage du spectre de fréquence (PSD) en dB (moyenne sur 64 canaux)")
+            plot_combined_psd(raw_example, fmin=0, fmax=80, n_fft=2048,
+                              title=f"Spectre PSD (sujet {subject_folder}, run {run_id})")
+
         elif mode_indiv == "train":
-            # Pour le train individuel, on filtre pour ne conserver que T1 et T2
+            # Entraînement individuel
             epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin, tmax)
             if epochs is None:
                 sys.exit("[ERROR] Aucun epoch trouvé dans le fichier.")
@@ -568,6 +602,7 @@ if __name__ == "__main__":
                 print(f"cross-value-scores: {cv_scores}, mean: {cv_scores.mean():.4f}")
             except Exception as e:
                 print(f"[ERROR] Erreur lors du cross_val_score: {e}")
+
             pipeline = build_pipeline_fbcsp()
             pipeline.fit(X_train, y_train)
             model_filename = f"model_{subject_folder}R{run_id}.pkl"
@@ -578,8 +613,9 @@ if __name__ == "__main__":
                 pickle.dump({"X_holdout": X_holdout, "y_holdout": y_holdout}, ff)
             print(f"[INFO] Modèle sauvegardé => {model_filename}")
             print(f"[INFO] Données holdout sauvegardées => {holdout_filename}")
+
         elif mode_indiv == "predict":
-            # Pour le predict individuel, on filtre également pour ne garder que T1 et T2
+            # Prédiction individuelle
             epochs = process_edf(full_path, chosen_channels, l_freq, h_freq, tmin, tmax)
             if epochs is None:
                 sys.exit("[ERROR] Aucun epoch trouvé dans le fichier.")
@@ -599,7 +635,7 @@ if __name__ == "__main__":
                 y_new.extend([y_orig[i]] * n_segments_per_epoch)
             X_new = np.array(X_new)
             y_new = np.array(y_new)
-            # Pour le predict, on retient exactement 8 segments (si plus, on ne prend que les 8 premières)
+            # On ne retient que 8 segments max pour la "simulation temps réel"
             if X_new.shape[0] >= 8:
                 X_holdout = X_new[:8]
                 y_holdout = y_new[:8]
@@ -612,6 +648,7 @@ if __name__ == "__main__":
                     pipeline = pickle.load(ff)
             except Exception as e:
                 sys.exit(f"[ERROR] Impossible de charger le modèle: {e}")
+
             print("[INFO] Début de la prédiction en mode simulation temps réel sur les données holdout:")
             correct_count = 0
             for i, (epoch, true_label) in enumerate(zip(X_holdout, y_holdout)):
@@ -623,7 +660,9 @@ if __name__ == "__main__":
                 time.sleep(0.5)
             final_acc = correct_count / len(y_holdout) if len(y_holdout) > 0 else 0.0
             print(f"Accuracy: {final_acc:.4f}")
+
         else:
             sys.exit("[ERROR] Mode inconnu. Utilisez 'analyse', 'train' ou 'predict'.")
+
     else:
         sys.exit("[ERROR] Nombre d'arguments incorrect. Utilisez soit 1 argument pour multi-sujets, soit 3 pour individuel.")
