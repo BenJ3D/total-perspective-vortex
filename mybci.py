@@ -561,11 +561,11 @@ if __name__ == "__main__":
             raw_8_32 = raw_example.copy().filter(l_freq=8, h_freq=32, fir_design='firwin', verbose=False)
 
             plot_psd_all_channels_0_80(raw_8_32, n_fft=2048,
-                                       title="(3) Filtré 8–32 Hz, PSD 0–80 Hz")
+                                       title="(2) Filtré PSD 8–32Hz")
 
 
             plot_mean_psd_with_std_0_80(raw_8_32, n_fft=2048, smooth_sigma=8,
-                                        title="(2) Non filtré, PSD 0–80 Hz (moy + std)")
+                                        title="(3) Filtré 8–32 Hz, PSD (moy + std)")
 
 
 
