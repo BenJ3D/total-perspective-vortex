@@ -540,16 +540,16 @@ if __name__ == "__main__":
                 sys.exit(f"[ERROR] Impossible de charger {path_example}: {e}")
 
             print("[INFO] Affichage des spectres PSD individuels pour les 64 canaux EEG...")
-            raw_example.filter(l_freq=1.0, h_freq=40.0, fir_design='firwin', verbose=False)
 
             raw_example.plot(
                 n_channels=64,
-                duration=10.0,
+                duration=20,
                 scalings='auto',
                 title='Données brutes (64 canaux)',
                 show=True,
                 block=True
             )
+            # raw_example.filter(l_freq=1.0, h_freq=40.0, fir_design='firwin', verbose=False)
 
             plot_psd_all_channels_0_80(raw_example, n_fft=2048, title="PSD (0-80 Hz) - tous canaux")
 
@@ -576,6 +576,12 @@ if __name__ == "__main__":
         subject_folder = "S" + subject_id.zfill(3)
         file_name = f"{subject_folder}R{run_id.zfill(2)}.edf"
         full_path = os.path.join(eeg_dir, subject_folder, file_name)
+        if mode_indiv == "a":
+            mode_indiv = "analyse"
+        if mode_indiv == "p":
+            mode_indiv = "predict"
+        if mode_indiv == "t":
+            mode_indiv = "train"
         print(f"[INFO] Mode {mode_indiv} pour le sujet {subject_folder} et le run {run_id}")
 
         if int(run_id) <= 2:
@@ -590,7 +596,7 @@ if __name__ == "__main__":
 
             raw_example.plot(
                 n_channels=64,
-                duration=10.0,
+                duration=20,
                 scalings='auto',
                 title='Données brutes (64 canaux)',
                 show=True,
@@ -632,7 +638,7 @@ if __name__ == "__main__":
             X_new = np.array(X_new)
             y_new = np.array(y_new)
             from sklearn.model_selection import train_test_split
-            X_train, X_holdout, y_train, y_holdout = train_test_split(X_new, y_new, test_size=0.40, random_state=42)
+            X_train, X_holdout, y_train, y_holdout = train_test_split(X_new, y_new, test_size=0.40, random_state=43)
             try:
                 cv_scores = cross_val_score(build_pipeline_fbcsp(), X_train, y_train, cv=10, scoring='accuracy')
                 print(f"cross-value-scores: {cv_scores}, mean: {cv_scores.mean():.4f}")
