@@ -1,15 +1,14 @@
 import os
+import pickle
 import re
 import sys
-import warnings
-import pickle
 import time
+import warnings
+
 import matplotlib
-matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import mne
 import numpy as np
-
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.model_selection import train_test_split, cross_val_score
@@ -17,6 +16,7 @@ from sklearn.pipeline import Pipeline
 
 from custom_mycsp import MyCSP
 
+matplotlib.use("TkAgg")
 ############################################################################
 # Réglages de parallélisation BLAS / OpenMP
 ############################################################################
@@ -28,6 +28,7 @@ os.environ["MKL_NUM_THREADS"] = "12"
 ############################################################################
 MIN_SIGNAL_LENGTH = 265
 
+
 ############################################################################
 # 1) Classe FilterBankCSP
 ############################################################################
@@ -38,6 +39,7 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
     Lors du transform, on filtre, on applique le CSP et on concatène les features.
     X doit avoir la forme (n_trials, n_channels, n_times).
     """
+
     def __init__(self,
                  filter_bands=[(8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)],
                  n_components=4,
@@ -90,10 +92,12 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
             X_features_list.append(X_csp)
         return np.concatenate(X_features_list, axis=1)
 
+
 ############################################################################
 # Nouvelle fonction pour l'affichage du PSD
 ############################################################################
 from mne.time_frequency import psd_array_welch
+
 
 def plot_psd_all_channels_0_80(raw, n_fft=2048, title="PSD all channels (0-80 Hz)"):
     """
@@ -133,17 +137,18 @@ def plot_psd_all_channels_0_80(raw, n_fft=2048, title="PSD all channels (0-80 Hz
 
 from scipy.ndimage import gaussian_filter1d
 
+
 def plot_psd_all_channels_0_80(raw, n_fft=2048, title="PSD (0–80 Hz)"):
     """
     Calcule et affiche la PSD de 0 à 80 Hz pour chaque canal EEG.
     """
-    data = raw.get_data()            # shape (n_channels, n_times)
+    data = raw.get_data()  # shape (n_channels, n_times)
     sfreq = raw.info['sfreq']
 
     # Calcul de la PSD entre 0 et 80 Hz
     psds, freqs = psd_array_welch(data, sfreq=sfreq, fmin=0, fmax=80,
                                   n_fft=n_fft, verbose=False)
-    psds_db = 10 * np.log10(psds)    # passage en dB
+    psds_db = 10 * np.log10(psds)  # passage en dB
 
     plt.figure(figsize=(10, 6))
     for ch_idx in range(psds_db.shape[0]):
@@ -152,11 +157,10 @@ def plot_psd_all_channels_0_80(raw, n_fft=2048, title="PSD (0–80 Hz)"):
     plt.title(title)
     plt.xlabel("Fréquence (Hz)")
     plt.ylabel("PSD (dB)")
-    plt.xlim([0, 80])               # Echelle 0–80 Hz
+    plt.xlim([0, 80])  # Echelle 0–80 Hz
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
     plt.show()
-
 
 
 def plot_mean_psd_with_std_0_80(raw, n_fft=2048, smooth_sigma=1, title="PSD moyen (0–80 Hz)"):
@@ -173,12 +177,12 @@ def plot_mean_psd_with_std_0_80(raw, n_fft=2048, smooth_sigma=1, title="PSD moye
 
     # Moyenne et std sur l’axe 0 (canaux)
     mean_psd = np.mean(psds_db, axis=0)
-    std_psd  = np.std(psds_db, axis=0)
+    std_psd = np.std(psds_db, axis=0)
 
     # Lissage (optionnel) des courbes
     if smooth_sigma is not None and smooth_sigma > 0:
         mean_psd = gaussian_filter1d(mean_psd, sigma=smooth_sigma)
-        std_psd  = gaussian_filter1d(std_psd,  sigma=smooth_sigma)
+        std_psd = gaussian_filter1d(std_psd, sigma=smooth_sigma)
 
     plt.figure(figsize=(8, 5))
     # Courbe moyenne
@@ -198,7 +202,6 @@ def plot_mean_psd_with_std_0_80(raw, n_fft=2048, smooth_sigma=1, title="PSD moye
     plt.legend(loc='best')
     plt.tight_layout()
     plt.show()
-
 
 
 def plot_psd_all_channels(raw, fmin=0, fmax=80, n_fft=2048, title="EEG (64 canaux)"):
@@ -254,6 +257,7 @@ def plot_combined_psd(raw, fmin=0, fmax=80, n_fft=2048, title="EEG (64 canaux)")
     plt.tight_layout()
     plt.show()
 
+
 ############################################################################
 # 3) Gestion des runs et catégorisation en 6 expériences
 ############################################################################
@@ -287,6 +291,7 @@ def get_run_category(file_name):
             return "exp5"
     return None
 
+
 ############################################################################
 # 4) Chargement EDF, filtrage et découpage en epochs
 ############################################################################
@@ -315,6 +320,7 @@ def process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin=0.5, tmax=2.5,
             return None
         epochs = epochs[good_idx]
     return epochs
+
 
 ############################################################################
 # 5) Traitement d'un sujet complet
@@ -360,6 +366,7 @@ def process_subject(subject_dir, channels_to_keep, l_freq, h_freq, tmin, tmax):
         print(f"[INFO] Subject {os.path.basename(subject_dir)} - {cat}: {X_all.shape[0]} epochs")
     return out if len(out) > 0 else None
 
+
 ############################################################################
 # 6) Agrégation multi-sujets
 ############################################################################
@@ -371,6 +378,7 @@ def list_subject_dirs(eeg_dir):
             dirs.append(d)
     dirs.sort()
     return [os.path.join(eeg_dir, d) for d in dirs]
+
 
 def aggregate_subjects(subject_dirs, channels, l_freq, h_freq, tmin, tmax):
     agg = {"exp0": [], "exp1": [], "exp2": [], "exp3": [], "exp4": [], "exp5": []}
@@ -396,6 +404,7 @@ def aggregate_subjects(subject_dirs, channels, l_freq, h_freq, tmin, tmax):
         print(f"[INFO] Cat={cat}: total epochs={X_all.shape[0]}, time={min_length}")
     return out
 
+
 ############################################################################
 # 7) Construction du pipeline FBCSP + LDA
 ############################################################################
@@ -409,6 +418,7 @@ def build_pipeline_fbcsp():
                           n_jobs=16)
     clf = LDA(solver='lsqr', shrinkage='auto')
     return Pipeline([('FBCSP', fbcsp), ('LDA', clf)])
+
 
 ############################################################################
 # 8) Fonction de segmentation par glissement
@@ -427,8 +437,9 @@ def segment_epochs_sliding(X, window_fraction=0.5, step_fraction=0.25):
     segments = []
     for i in range(n_epochs):
         for start in range(0, n_times - window_length + 1, step):
-            segments.append(X[i, :, start:start+window_length])
+            segments.append(X[i, :, start:start + window_length])
     return np.array(segments)
+
 
 ############################################################################
 # 9) Main
@@ -447,10 +458,9 @@ if __name__ == "__main__":
     # chosen_channels = ['C3..', 'Cz..', 'C4..', 'Fcz.']
     # n_components = 4
 
-
     l_freq = 1.0
     h_freq = 40.0
-    tmin, tmax = 0.7, 3.9 #best for the moment 0.7, 3.9 -> 0.721
+    tmin, tmax = 0.7, 3.9  # best for the moment 0.7, 3.9 -> 0.721
 
     # Harmonisation des arguments :
     # - Si 1 argument : mode multi-sujets (ex: "train" ou "predict")
@@ -563,7 +573,6 @@ if __name__ == "__main__":
             plot_psd_all_channels_0_80(raw_8_32, n_fft=2048,
                                        title="(2) Filtré PSD 8–32Hz")
 
-
             plot_mean_psd_with_std_0_80(raw_8_32, n_fft=2048, smooth_sigma=8,
                                         title="(3) Filtré 8–32 Hz, PSD (moy + std)")
 
@@ -614,7 +623,6 @@ if __name__ == "__main__":
 
             plot_psd_all_channels_0_80(raw_8_32, n_fft=2048,
                                        title="(3) Filtré 8–32 Hz, PSD 0–80 Hz")
-
 
             plot_mean_psd_with_std_0_80(raw_8_32, n_fft=2048, smooth_sigma=8,
                                         title="(2) Non filtré, PSD 0–80 Hz (moy + std)")
@@ -711,4 +719,5 @@ if __name__ == "__main__":
             sys.exit("[ERROR] Mode inconnu. Utilisez 'analyse', 'train' ou 'predict'.")
 
     else:
-        sys.exit("[ERROR] Nombre d'arguments incorrect. Utilisez soit 1 argument pour multi-sujets, soit 3 pour individuel.")
+        sys.exit(
+            "[ERROR] Nombre d'arguments incorrect. Utilisez soit 1 argument pour multi-sujets, soit 3 pour individuel.")
