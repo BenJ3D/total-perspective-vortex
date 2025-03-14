@@ -3,7 +3,6 @@ import pickle
 import re
 import sys
 import time
-import warnings
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -17,6 +16,7 @@ from sklearn.pipeline import Pipeline
 from custom_mycsp import MyCSP
 
 matplotlib.use("TkAgg")
+mne.set_log_level('WARNING')
 ############################################################################
 # Réglages de parallélisation BLAS / OpenMP
 ############################################################################
@@ -65,7 +65,6 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
             return X, None
 
     def fit(self, X, y):
-        import mne.filter
         self._csps = []
         X_use, orig_length = self._pad_if_needed(X)
         for (l_freq, h_freq) in self.filter_bands:
@@ -80,7 +79,6 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
-        import mne.filter
         X_use, orig_length = self._pad_if_needed(X)
         X_features_list = []
         for (l_freq, h_freq, csp) in self._csps:
@@ -94,7 +92,7 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
 
 
 ############################################################################
-# Nouvelle fonction pour l'affichage du PSD
+# Affichage du PSD
 ############################################################################
 from mne.time_frequency import psd_array_welch
 
@@ -276,7 +274,7 @@ def get_run_category(file_name):
     if m_obj:
         run = int(m_obj.group(1))
         if run <= 2:
-            return None  # on ignore les baselines
+            return None
         if run in [3, 4]:
             return "exp0"
         elif run in [5, 6]:
@@ -295,10 +293,12 @@ def get_run_category(file_name):
 ############################################################################
 # 4) Chargement EDF, filtrage et découpage en epochs
 ############################################################################
-def process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin=0.5, tmax=2.5, do_reref=True):
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="Limited 1 annotation")
-        raw = mne.io.read_raw_edf(file_path, preload=True, verbose=False)
+def process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin=-0.2, tmax=2.5, do_reref=True):
+    import warnings
+    import numpy as np
+    import mne
+    warnings.filterwarnings("ignore", message="Limited 1 annotation")
+    raw = mne.io.read_raw_edf(file_path, preload=True, verbose=False)
     raw.pick(channels_to_keep)
     if do_reref:
         raw.set_eeg_reference('average', projection=False, verbose=False)
@@ -313,13 +313,25 @@ def process_edf(file_path, channels_to_keep, l_freq, h_freq, tmin=0.5, tmax=2.5,
     sfreq = raw.info['sfreq']
     expected_n_times = int(round((tmax - tmin) * sfreq)) + 1
     data = epochs.get_data()
-    good_idx = [i for i in range(data.shape[0]) if data[i].shape[-1] == expected_n_times]
-    if len(good_idx) < data.shape[0]:
-        if len(good_idx) == 0:
-            print(f"[INFO] All epochs incomplete => discard {file_path}")
-            return None
-        epochs = epochs[good_idx]
-    return epochs
+    tol = 2
+    processed_epochs = []
+
+    for trial in data:
+        n_times = trial.shape[-1]
+        if abs(n_times - expected_n_times) <= tol:
+            if n_times < expected_n_times:
+                pad_width = expected_n_times - n_times
+                trial = np.pad(trial, ((0, 0), (0, pad_width)), mode='constant')
+            else:
+                trial = trial[..., :expected_n_times]
+            processed_epochs.append(trial)
+
+    if not processed_epochs:
+        print(f"[INFO] All epochs incomplete => discard {file_path}")
+        return None
+    else:
+        data = np.array(processed_epochs)
+        return mne.EpochsArray(data, epochs.info, events=epochs.events, event_id=selected_event_id, tmin=tmin)
 
 
 ############################################################################
@@ -462,9 +474,6 @@ if __name__ == "__main__":
     h_freq = 40.0
     tmin, tmax = 0.7, 3.9  # best for the moment 0.7, 3.9 -> 0.721
 
-    # Harmonisation des arguments :
-    # - Si 1 argument : mode multi-sujets (ex: "train" ou "predict")
-    # - Si 3 arguments : mode individuel avec <subject_id> <run_id> <mode>
     if len(sys.argv) == 1:
         sys.exit(0)
 
@@ -476,7 +485,7 @@ if __name__ == "__main__":
             subject_dirs = list_subject_dirs(eeg_dir)
             print(f"[INFO] {len(subject_dirs)} sujets trouvés.")
 
-            # Exemple de split train/test/holdout
+            # split train/test/holdout
             train_dirs, tmp_dirs = train_test_split(subject_dirs, test_size=0.4, random_state=42)
             test_dirs, holdout_dirs = train_test_split(tmp_dirs, test_size=0.5, random_state=42)
             print(f"[INFO] Train: {train_dirs}")
